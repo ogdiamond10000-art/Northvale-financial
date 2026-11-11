@@ -95,7 +95,7 @@ after(async () => {
 });
 
 async function signIn(email, password) {
-  const response = await fetch(`${base}/api/auth/signin`, {
+  const response = await fetch(`${base}/api/auth/login`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ email, password }),
