@@ -601,6 +601,7 @@ export async function renderAdmin(page, ctx, route = {}) {
           <input class="input" type="search" placeholder="Search reference, customer or description" data-tx-search aria-label="Search transactions" />
         </div>
         <div class="filter-controls">
+          <button class="btn btn-primary btn-sm" type="button" data-approve-all>Approve all pending</button>
           <select class="select" data-tx-status aria-label="Filter by status">
             <option value="all">All statuses</option><option value="pending">Pending</option><option value="completed">Completed</option><option value="failed">Failed</option><option value="cancelled">Cancelled</option>
           </select>
@@ -637,6 +638,20 @@ export async function renderAdmin(page, ctx, route = {}) {
     });
     status.addEventListener('change', refetch);
     type.addEventListener('change', refetch);
+    body.querySelector('[data-approve-all]').addEventListener('click', async (event) => {
+      const button = event.currentTarget;
+      ui.busy(button, true, 'Approving…');
+      try {
+        const result = await api.post('/api/admin/transactions/approve-all', {
+          note: 'Bulk approved by operations after verification.',
+        });
+        ui.toast(result.message || 'Pending transfers approved.', result.failed ? 'error' : 'success');
+        await reload();
+      } catch (error) {
+        ui.toast(error instanceof ApiError ? error.message : 'Bulk approval failed.', 'error');
+        ui.busy(button, false);
+      }
+    });
     bindTxActions(list, reload);
   }
 
