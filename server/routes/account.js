@@ -12,8 +12,9 @@ const {
   getTransactionForUser,
 } = require('../services/ledger');
 const { searchBanks } = require('../data/banks');
+const directory = require('../services/directory');
 const { lookupRecipient } = require('../services/lookup');
-const { notFound } = require('../errors');
+const { notFound, asyncHandler } = require('../errors');
 const { formatUSD } = require('../money');
 
 const router = express.Router();
@@ -171,10 +172,21 @@ router.post('/notifications/read-all', requireAuth, (req, res) => {
   res.json({ ok: true });
 });
 
-router.get('/banks', (req, res) => {
-  const query = String(req.query.q || '');
-  res.json({ banks: searchBanks(query, Number(req.query.limit) || 8), query });
-});
+router.get(
+  '/banks',
+  asyncHandler(async (req, res) => {
+    const query = String(req.query.q || '').trim().slice(0, 60);
+    const limit = Math.min(Math.max(Number(req.query.limit) || 8, 1), 20);
+
+    // Live directory first; the bundled list keeps the selector usable when the
+    // provider is not configured, is rate limited or returns nothing.
+    const live = await directory.searchDirectory(query, limit);
+    if (live && live.length) {
+      return res.json({ banks: live, query, source: 'directory' });
+    }
+    res.json({ banks: searchBanks(query, limit), query, source: 'local' });
+  }),
+);
 
 router.post('/recipients/lookup', requireAuth, async (req, res, next) => {
   try {
