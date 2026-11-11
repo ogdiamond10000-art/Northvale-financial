@@ -83,6 +83,7 @@ app.use('/api/admin', require('./routes/admin'));
 app.use('/api/transfers', require('./routes/transfers'));
 app.use('/api/withdrawals', require('./routes/withdrawals'));
 app.use('/api/deposits', require('./routes/deposits'));
+app.use('/api/settings', require('./routes/settings'));
 app.use('/api', require('./routes/account'));
 
 app.get('/api/health', (req, res) => {
