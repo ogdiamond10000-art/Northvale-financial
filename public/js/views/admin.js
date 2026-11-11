@@ -7,6 +7,7 @@ const TABS = [
   { id: 'transactions', label: 'Transactions' },
   { id: 'alerts', label: 'Fraud alerts' },
   { id: 'reconciliation', label: 'Reconciliation' },
+  { id: 'payments', label: 'Stripe & tax' },
   { id: 'audit', label: 'Audit logs' },
 ];
 
@@ -54,6 +55,7 @@ export async function renderAdmin(page, ctx, route = {}) {
       if (tab === 'alerts' && (force || !loaded.alerts)) loaded.alerts = await api.get('/api/admin/alerts?status=open');
       if (tab === 'reconciliation' && (force || !loaded.reconciliation)) loaded.reconciliation = await api.get('/api/admin/reconciliation');
       if (tab === 'audit' && (force || !loaded.audit)) loaded.audit = await api.get('/api/admin/audit-logs');
+      if (tab === 'payments' && (force || !loaded.payments)) loaded.payments = await api.get('/api/admin/payments');
       render();
     } catch (error) {
       body.innerHTML = ui.notice('danger', error instanceof ApiError ? error.message : 'Console data could not be loaded.');
@@ -72,6 +74,104 @@ export async function renderAdmin(page, ctx, route = {}) {
     if (tab === 'alerts') renderAlerts(loaded.alerts || { alerts: [] });
     if (tab === 'reconciliation') renderReconciliation(loaded.reconciliation || {});
     if (tab === 'audit') renderAudit(loaded.audit || { logs: [] });
+    if (tab === 'payments') renderPayments(loaded.payments || {});
+  }
+
+  function renderPayments(data) {
+    const gateway = data.gateway || {};
+    const tax = data.tax || {};
+    const totals = data.taxTotals || {};
+    const events = data.events || [];
+    const deposits = data.deposits || [];
+
+    const gatewayChip = gateway.configured
+      ? `<span class="chip chip-ok">Connected · ${ui.esc(gateway.mode || 'test')} mode</span>`
+      : '<span class="chip chip-warn">Not connected</span>';
+    const taxChip = !tax.enabled
+      ? '<span class="chip chip-warn">Automatic tax off</span>'
+      : tax.available
+        ? `<span class="chip chip-ok">Automatic tax on · ${tax.activeRegistrations || 0} active registration${
+            tax.activeRegistrations === 1 ? '' : 's'
+          }</span>`
+        : '<span class="chip chip-warn">Tax on · registrations unreadable</span>';
+
+    body.innerHTML = `
+      <div class="card">
+        <div class="card-head"><h3>Stripe gateway</h3>${gatewayChip}</div>
+        <div class="kv">
+          <div><span>Mode</span><strong>${ui.esc(gateway.mode || 'unconfigured')}</strong></div>
+          <div><span>Webhook signing secret</span><strong>${gateway.webhookConfigured ? 'Configured' : 'Missing'}</strong></div>
+          <div><span>Deposits awaiting review</span><strong>${data.needsReview ?? 0}</strong></div>
+          <div><span>Card fee passed to payer</span><strong>${Number(gateway.feePercent || 0).toFixed(2)}%</strong></div>
+        </div>
+        ${
+          gateway.configured
+            ? ''
+            : ui.notice('warn', 'Add STRIPE_SECRET_KEY and STRIPE_WEBHOOK_SECRET in Settings → Environment variables, then redeploy.', {
+                strong: 'Card payments are disabled.',
+              })
+        }
+      </div>
+
+      <div class="card">
+        <div class="card-head"><h3>Stripe Tax</h3>${taxChip}</div>
+        <div class="kv">
+          <div><span>Automatic tax at checkout</span><strong>${tax.enabled ? 'On' : 'Off'}</strong></div>
+          <div><span>Product tax code</span><strong>${ui.esc(gateway.taxCode || '—')}</strong></div>
+          <div><span>Active registrations</span><strong>${tax.available ? tax.activeRegistrations || 0 : '—'}</strong></div>
+          <div><span>Registered countries</span><strong>${ui.esc((tax.countries || []).join(', ') || '—')}</strong></div>
+        </div>
+        ${
+          tax.enabled && tax.available && !(tax.activeRegistrations > 0)
+            ? ui.notice('warn', 'Add a tax registration in the Stripe dashboard (Tax → Registrations). Without one, Stripe collects no tax at checkout.', {
+                strong: 'No active tax registration.',
+              })
+            : ''
+        }
+        ${tax.reason === 'stripe_error' ? ui.notice('danger', ui.esc(tax.message || 'Stripe Tax could not be read.')) : ''}
+      </div>
+
+      <div class="card">
+        <div class="card-head"><h3>Collected on settled card deposits</h3></div>
+        <div class="kv">
+          <div><span>Tax collected</span><strong>${ui.esc(totals.tax || ui.fmtUSD(0))}</strong></div>
+          <div><span>Fees charged</span><strong>${ui.esc(totals.fees || ui.fmtUSD(0))}</strong></div>
+          <div><span>Gross charged</span><strong>${ui.esc(totals.total || ui.fmtUSD(0))}</strong></div>
+          <div><span>Settled payments</span><strong>${totals.count ?? 0}</strong></div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-head"><h3>Card deposits by status</h3></div>
+        ${
+          deposits.length
+            ? `<div class="table-wrap"><table class="table"><thead><tr><th>Status</th><th>Count</th><th>Volume</th></tr></thead><tbody>${deposits
+                .map(
+                  (row) => `<tr><td>${ui.statusBadge(row.status)}</td><td>${row.count}</td><td>${ui.esc(
+                    row.volume || ui.fmtUSD(row.volumeCents || 0),
+                  )}</td></tr>`,
+                )
+                .join('')}</tbody></table></div>`
+            : ui.emptyState({ title: 'No card deposits yet', body: 'Stripe-funded deposits will appear here once a customer pays.' })
+        }
+      </div>
+
+      <div class="card">
+        <div class="card-head"><h3>Recent webhook deliveries</h3><span class="card-sub">Signed events recorded in the ledger</span></div>
+        ${
+          events.length
+            ? `<div class="table-wrap"><table class="table"><thead><tr><th>Event</th><th>Type</th><th>Result</th><th>Received</th></tr></thead><tbody>${events
+                .map(
+                  (event) => `<tr><td><code>${ui.esc(event.id)}</code></td><td>${ui.esc(event.type)}</td><td>${ui.esc(
+                    event.status,
+                  )}${event.detail ? `<div class="card-sub">${ui.esc(event.detail)}</div>` : ''}</td><td>${ui.fmtDate(
+                    event.created_at,
+                  )}</td></tr>`,
+                )
+                .join('')}</tbody></table></div>`
+            : ui.emptyState({ title: 'No webhook events yet', body: 'Stripe deliveries appear here after your endpoint receives them.' })
+        }
+      </div>`;
   }
 
   function renderOverview(data) {
