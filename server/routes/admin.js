@@ -8,12 +8,16 @@ const {
   serializeTransaction,
   settleTransaction,
   failTransaction,
+  holdTransaction,
+  releaseTransaction,
+  adjustBalance,
   accountSummary,
 } = require('../services/ledger');
 const { recordAudit, notify } = require('../services/audit');
 const directory = require('../services/directory');
 const payments = require('../services/payments');
-const { formatUSD } = require('../money');
+const { getControls, setControls } = require('../services/system');
+const { formatUSD, parseAmountToCents } = require('../money');
 const { badRequest, notFound, conflict, asyncHandler } = require('../errors');
 
 const router = express.Router();
@@ -388,6 +392,172 @@ router.post('/transactions/:id/fail', (req, res) => {
     metadata: { reason: req.body?.reason || null },
   });
   res.json({ transaction: serializeTransaction(updated), message: `Transaction marked ${nextStatus}.` });
+});
+
+/* ------------------------ money-movement controls ------------------------ */
+
+router.get('/controls', (req, res) => {
+  res.json({
+    controls: getControls(),
+    recent: db
+      .prepare(
+        "SELECT action, actor_email, metadata, created_at FROM audit_logs WHERE action LIKE 'controls.%' OR action LIKE 'transaction.%hold%' OR action = 'transaction.released' OR action = 'account.adjustment' ORDER BY created_at DESC LIMIT 8",
+      )
+      .all()
+      .map((row) => ({
+        action: row.action,
+        actorEmail: row.actor_email,
+        createdAt: row.created_at,
+        metadata: (() => {
+          try {
+            return row.metadata ? JSON.parse(row.metadata) : null;
+          } catch {
+            return null;
+          }
+        })(),
+      })),
+  });
+});
+
+router.patch('/controls', (req, res) => {
+  const body = req.body || {};
+  const before = getControls();
+  const controls = setControls(
+    {
+      transfersEnabled: body.transfersEnabled,
+      outgoingPaused: body.outgoingPaused,
+      holdNewExternal: body.holdNewExternal,
+      message: body.message,
+    },
+    req.user,
+  );
+  recordAudit({
+    actorId: req.user.id,
+    actorEmail: req.user.email,
+    action: 'controls.updated',
+    targetType: 'system',
+    targetId: 'transfer_controls',
+    ip: req.ip,
+    metadata: {
+      before: {
+        transfersEnabled: before.transfersEnabled,
+        outgoingPaused: before.outgoingPaused,
+        holdNewExternal: before.holdNewExternal,
+      },
+      after: {
+        transfersEnabled: controls.transfersEnabled,
+        outgoingPaused: controls.outgoingPaused,
+        holdNewExternal: controls.holdNewExternal,
+      },
+      message: controls.message || null,
+    },
+  });
+  res.json({ controls, message: 'Controls updated and recorded in the audit log.' });
+});
+
+router.post('/transactions/:id/hold', (req, res) => {
+  const row = db.prepare('SELECT * FROM transactions WHERE id = ?').get(req.params.id);
+  if (!row) throw notFound('Transaction not found.');
+  const reason = String(req.body?.reason || '').trim().slice(0, 200) || 'Held for operations verification';
+  const updated = holdTransaction(row.id, { actorId: req.user.id, reason });
+  notify(row.user_id, {
+    title: 'Transaction placed on hold',
+    body: `${formatUSD(row.amount_cents)} ${row.type.replace(/_/g, ' ')} (${row.reference}) is on hold while operations verifies it.`,
+    kind: 'transaction',
+  });
+  recordAudit({
+    actorId: req.user.id,
+    actorEmail: req.user.email,
+    action: 'transaction.on_hold',
+    targetType: 'transaction',
+    targetId: row.id,
+    ip: req.ip,
+    metadata: { reference: row.reference, amountCents: row.amount_cents, reason },
+  });
+  res.json({ transaction: serializeTransaction(updated), message: 'Transaction placed on hold.' });
+});
+
+router.post('/transactions/:id/release', (req, res) => {
+  const row = db.prepare('SELECT * FROM transactions WHERE id = ?').get(req.params.id);
+  if (!row) throw notFound('Transaction not found.');
+  if (row.status !== 'on_hold') throw conflict('Only transactions on hold can be released.', 'not_on_hold');
+  const note = String(req.body?.note || '').trim().slice(0, 200) || 'Hold released after verification';
+  const released = releaseTransaction(row.id, { actorId: req.user.id, note });
+  notify(row.user_id, {
+    title: 'Hold released',
+    body: `${formatUSD(row.amount_cents)} ${row.type.replace(/_/g, ' ')} (${row.reference}) was verified and has been released for settlement.`,
+    kind: 'transaction',
+  });
+  recordAudit({
+    actorId: req.user.id,
+    actorEmail: req.user.email,
+    action: 'transaction.released',
+    targetType: 'transaction',
+    targetId: row.id,
+    ip: req.ip,
+    metadata: { reference: row.reference, amountCents: row.amount_cents, note },
+  });
+  res.json({ transaction: serializeTransaction(released), message: 'Hold released and transaction settled.' });
+});
+
+/** Documented balance adjustment with a mandatory reason and full audit trail. */
+router.post('/customers/:id/adjustment', (req, res) => {
+  const user = db.prepare('SELECT * FROM users WHERE id = ?').get(req.params.id);
+  if (!user) throw notFound('Customer not found.');
+  const account = db
+    .prepare('SELECT * FROM accounts WHERE user_id = ? ORDER BY opened_at LIMIT 1')
+    .get(user.id);
+  if (!account) throw notFound('This customer has no account to adjust.');
+
+  const body = req.body || {};
+  const direction = body.direction === 'debit' ? 'debit' : 'credit';
+  const amountCents = parseAmountToCents(body.amount);
+  if (!Number.isFinite(amountCents) || amountCents <= 0) {
+    throw badRequest('Enter an adjustment amount greater than zero.', 'amount_invalid');
+  }
+  const reason = String(body.reason || '').trim();
+  if (reason.length < 8) {
+    throw badRequest('Document the reason for this adjustment (at least 8 characters).', 'reason_required');
+  }
+
+  const result = adjustBalance({
+    accountId: account.id,
+    amountCents: direction === 'debit' ? -amountCents : amountCents,
+    reason,
+    ticket: body.ticket,
+    actorId: req.user.id,
+    actorEmail: req.user.email,
+  });
+
+  notify(user.id, {
+    title: 'Account adjustment posted',
+    body: `A ${formatUSD(amountCents)} ${direction === 'debit' ? 'debit' : 'credit'} adjustment was posted to your account. Reason: ${reason}`,
+    kind: 'transaction',
+  });
+  recordAudit({
+    actorId: req.user.id,
+    actorEmail: req.user.email,
+    action: 'account.adjustment',
+    targetType: 'account',
+    targetId: account.id,
+    ip: req.ip,
+    metadata: {
+      direction,
+      amountCents,
+      reason,
+      ticket: body.ticket ? String(body.ticket).slice(0, 60) : null,
+      balanceBeforeCents: result.balanceBeforeCents,
+      balanceAfterCents: result.balanceAfterCents,
+      transactionReference: result.transaction.reference,
+    },
+  });
+
+  res.status(201).json({
+    transaction: serializeTransaction(result.transaction),
+    balanceBefore: formatUSD(result.balanceBeforeCents),
+    balanceAfter: formatUSD(result.balanceAfterCents),
+    message: `Adjustment posted. New balance ${formatUSD(result.balanceAfterCents)}.`,
+  });
 });
 
 router.get('/alerts', (req, res) => {
