@@ -601,7 +601,7 @@ export async function renderAdmin(page, ctx, route = {}) {
           <input class="input" type="search" placeholder="Search reference, customer or description" data-tx-search aria-label="Search transactions" />
         </div>
         <div class="filter-controls">
-          <button class="btn btn-primary btn-sm" type="button" data-approve-all>Approve all pending</button>
+          <button class="btn btn-primary btn-sm" type="button" data-approve-all title="Settles every pending or held transfer and withdrawal">Approve all transfers</button>
           <select class="select" data-tx-status aria-label="Filter by status">
             <option value="all">All statuses</option><option value="pending">Pending</option><option value="completed">Completed</option><option value="failed">Failed</option><option value="cancelled">Cancelled</option>
           </select>
