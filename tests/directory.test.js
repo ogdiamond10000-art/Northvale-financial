@@ -75,7 +75,7 @@ before(async () => {
     json(res, 404, { error: 'not found' });
   });
 
-  await new Promise((resolve) => provider.listen(0, '127.0.0.1', resolve));
+  await new Promise((resolve) => provider.listen(0, '0.0.0.0', resolve));
   const providerUrl = `http://127.0.0.1:${provider.address().port}`;
 
   // Set before the app is required: config reads the environment at load time.
