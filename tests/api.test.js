@@ -378,6 +378,59 @@ test('administrator can monitor transactions, alerts, reconciliation and audit l
   assert.ok(actions.includes('account.registered'), 'registration must be audited');
 });
 
+test('administrator approves all pending transfers in one audited action', async () => {
+  const { insertTransaction } = require('../server/services/ledger');
+  const account = db.prepare('SELECT * FROM accounts WHERE account_number = ?').get(DEMO_ACCOUNT);
+  const tx = insertTransaction({
+    user_id: account.user_id,
+    account_id: account.id,
+    type: 'transfer_out',
+    direction: 'debit',
+    amount_cents: 4200,
+    status: 'pending',
+    description: 'Bulk approval test transfer',
+    channel: 'external',
+    method: 'ach',
+    counterparty_name: 'Bulk Test Recipient',
+    counterparty_bank: 'Northvale Financial',
+  });
+
+  const customer = makeClient();
+  await customer('/api/auth/login', {
+    method: 'POST',
+    body: { email: NEW_USER.email, password: NEW_USER.password },
+  });
+  const denied = await customer('/api/admin/transactions/approve-all', { method: 'POST', body: {} });
+  assert.equal(denied.status, 403, 'customers must not be able to bulk approve transfers');
+
+  const admin = makeClient();
+  await admin('/api/auth/login', {
+    method: 'POST',
+    body: { email: 'admin@northvale.com', password: 'Admin#2026' },
+  });
+
+  const res = await admin('/api/admin/transactions/approve-all', {
+    method: 'POST',
+    body: { note: 'Bulk approval test.' },
+  });
+  assert.equal(res.status, 200, res.text);
+  assert.ok(res.json.approved >= 1, 'the pending transfer should be approved');
+  assert.equal(res.json.failed, 0);
+  assert.equal(res.json.total, res.json.approved, 'every eligible transfer is accounted for');
+
+  const row = db.prepare('SELECT * FROM transactions WHERE id = ?').get(tx.id);
+  assert.equal(row.status, 'completed', 'approved transfers settle through the ledger');
+  assert.ok(row.settled_at, 'a settlement timestamp is recorded');
+
+  const audit = await admin('/api/admin/audit-logs');
+  const actions = (audit.json.logs || audit.json.auditLogs || []).map((entry) => entry.action);
+  assert.ok(actions.includes('transaction.approved'), 'bulk approval is written to the audit log');
+
+  const again = await admin('/api/admin/transactions/approve-all', { method: 'POST', body: {} });
+  assert.equal(again.status, 200);
+  assert.equal(again.json.approved, 0, 'nothing is approved twice');
+});
+
 test('fast registration accepts only name, email, phone and password', async () => {
   const request = makeClient();
   const res = await request('/api/auth/register', {
