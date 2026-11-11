@@ -285,6 +285,13 @@ window.addEventListener('unhandledrejection', (event) => {
 });
 
 (async function boot() {
+  // The router works on hashes, so a typed deep link such as /signin or
+  // /register would otherwise fall back to the landing page. Translate the
+  // path into the equivalent hash route before the first resolve.
+  const deepLink = window.location.pathname.replace(/\/+$/, '');
+  if (deepLink && deepLink !== '/' && !window.location.hash) {
+    window.history.replaceState(null, '', `/#${deepLink}${window.location.search}`);
+  }
   await ctx.refresh().catch(() => {});
   const matched = await startRouter(ctx);
   if (!matched) {
