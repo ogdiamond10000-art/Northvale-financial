@@ -233,10 +233,11 @@ test('a pending transaction can be held, nets the available balance, then releas
 
   const afterHold = await customer('/api/account');
   assert.equal(afterHold.json.account.balanceCents, currentBefore, 'a hold must not change the ledger balance');
+  assert.equal(availableBefore, currentBefore - 4500, 'a pending debit already nets the available balance');
   assert.equal(
     afterHold.json.account.availableBalanceCents,
-    availableBefore - 4500,
-    'held funds must be removed from the available balance',
+    availableBefore,
+    'held funds stay committed and remain excluded from the available balance',
   );
 
   // Settling a hold directly is refused; release is the supported path.
@@ -293,7 +294,7 @@ test('documented balance adjustments post to the ledger and are audited', async 
   assert.equal(overdraw.status, 409, overdraw.text);
 
   // The customer sees the adjustment in their own history.
-  const history = await customer('/api/transactions?limit=50');
+  const history = await customer('/api/account/transactions?limit=50');
   assert.equal(history.status, 200, history.text);
   const rows = history.json.transactions || [];
   assert.ok(
