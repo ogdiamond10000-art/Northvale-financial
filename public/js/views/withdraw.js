@@ -258,6 +258,7 @@ export async function renderWithdraw(page, ctx) {
         try {
           const data = await api.post('/api/recipients/lookup', {
             bankId: state.bank.id,
+            bankName: state.bank.name,
             routingNumber: state.bank.routingNumber,
             accountNumber: state.accountNumber,
           });

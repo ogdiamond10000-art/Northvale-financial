@@ -195,9 +195,67 @@ export async function renderAdmin(page, ctx, route = {}) {
       <div class="card flush" style="margin-top:22px">
         <div class="card-head pad"><h3>Latest activity</h3><button class="btn btn-quiet btn-sm" type="button" data-refresh>Refresh</button></div>
         ${adminTxTable(data.recent || [], { showCustomer: true })}
+      </div>
+      <div class="card flush" style="margin-top:22px">
+        <div class="card-head pad">
+          <div>
+            <h3>Bank directory</h3>
+            <p class="card-sub">Live US bank search and recipient name verification for transfers and withdrawals.</p>
+          </div>
+          <button class="btn btn-quiet btn-sm" type="button" data-dir-test>Test connection</button>
+        </div>
+        <div class="pad" data-dir-result><p class="muted">Checking directory status…</p></div>
       </div>`;
     body.querySelector('[data-refresh]').addEventListener('click', () => reload());
     bindTxActions(body, reload);
+    bindDirectoryCard(body);
+  }
+
+  async function bindDirectoryCard(scope) {
+    const box = scope.querySelector('[data-dir-result]');
+    const button = scope.querySelector('[data-dir-test]');
+    if (!box) return;
+
+    const paint = (status) => {
+      const configured = Boolean(status && status.configured);
+      box.innerHTML = `<div class="stat-grid">
+        <div class="stat-card tone-${configured ? 'ok' : 'warn'}"><span>Status</span><strong>${configured ? 'Connected' : 'Not connected'}</strong></div>
+        <div class="stat-card tone-navy"><span>Provider host</span><strong style="font-size:0.95rem">${ui.esc(status.host || '—')}</strong></div>
+        <div class="stat-card tone-navy"><span>Cached searches</span><strong class="tabular">${ui.esc(String(status.cachedQueries ?? 0))}</strong></div>
+      </div>
+      <p class="muted" style="margin-top:12px">${
+        configured
+          ? 'Bank search and recipient verification use the live directory, with the bundled list as a fallback.'
+          : 'Add BANK_DIRECTORY_API_URL and BANK_DIRECTORY_API_KEY in Settings → Environment variables, then redeploy.'
+      }${status.lastError ? ` Last provider message: ${ui.esc(status.lastError)}` : ''}</p>`;
+    };
+
+    try {
+      const data = await api.get('/api/admin/directory');
+      paint(data.directory || {});
+    } catch (error) {
+      box.innerHTML = '<p class="muted">Directory status is unavailable.</p>';
+    }
+
+    if (!button) return;
+    button.addEventListener('click', async () => {
+      ui.busy(button, true, 'Testing…');
+      try {
+        const result = await api.post('/api/admin/directory/test', {});
+        const message = result.ok
+          ? `Connected — ${result.count} bank${result.count === 1 ? '' : 's'} in ${result.latencyMs} ms${
+              result.sample && result.sample.length ? ` (${result.sample.join(', ')})` : ''
+            }.`
+          : result.message || 'The bank directory is not available.';
+        ui.toast(message, result.ok ? 'success' : 'error');
+        const refreshed = await api.get('/api/admin/directory');
+        paint(refreshed.directory || {});
+      } catch (error) {
+        ui.toast(error instanceof ApiError ? error.message : 'Directory test failed.', 'error');
+      } finally {
+        ui.busy(button, false);
+      }
+    });
   }
 
   function renderCustomers(data) {
