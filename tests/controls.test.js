@@ -221,7 +221,7 @@ test('a pending transaction can be held, nets the available balance, then releas
   const customer = await signIn('alex.morgan@example.com', DEMO_PASSWORD);
   const before = await customer('/api/account');
   const availableBefore = before.json.account.availableBalanceCents;
-  const currentBefore = before.json.account.balanceCents;
+  const currentBefore = before.json.account.currentBalanceCents;
 
   const admin = await signIn('admin@northvale.com', 'Admin#2026');
   const held = await admin(`/api/admin/transactions/${encodeURIComponent(txId)}/hold`, {
@@ -232,7 +232,7 @@ test('a pending transaction can be held, nets the available balance, then releas
   assert.equal(held.json.transaction.status, 'on_hold');
 
   const afterHold = await customer('/api/account');
-  assert.equal(afterHold.json.account.balanceCents, currentBefore, 'a hold must not change the ledger balance');
+  assert.equal(afterHold.json.account.currentBalanceCents, currentBefore, 'a hold must not change the ledger balance');
   assert.equal(availableBefore, currentBefore - 4500, 'a pending debit already nets the available balance');
   assert.equal(
     afterHold.json.account.availableBalanceCents,
@@ -252,7 +252,7 @@ test('a pending transaction can be held, nets the available balance, then releas
   assert.equal(released.json.transaction.status, 'completed');
 
   const afterRelease = await customer('/api/account');
-  assert.equal(afterRelease.json.account.balanceCents, currentBefore - 4500);
+  assert.equal(afterRelease.json.account.currentBalanceCents, currentBefore - 4500);
 });
 
 test('documented balance adjustments post to the ledger and are audited', async () => {
