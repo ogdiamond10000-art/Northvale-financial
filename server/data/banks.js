@@ -63,6 +63,9 @@ const BANKS = [
   { name: 'First-Citizens Bank & Trust Company', shortName: 'First Citizens', routingNumber: '053100300' },
   { name: 'Fidelity Investments (UMB Bank)', shortName: 'Fidelity', routingNumber: '101205681' },
   { name: 'Vanguard (JPMorgan Chase)', shortName: 'Vanguard', routingNumber: '021000021' },
+  // Northvale's own institution. Kept in the directory so customers can pay
+  // another Northvale account; lookup resolves these against our own ledger.
+  { name: 'Northvale Financial', shortName: 'Northvale', routingNumber: '099000012', internal: true },
 ];
 
 const DIRECTORY = BANKS.map((bank, index) => ({
@@ -70,6 +73,7 @@ const DIRECTORY = BANKS.map((bank, index) => ({
   name: bank.name,
   shortName: bank.shortName,
   routingNumber: bank.routingNumber,
+  internal: Boolean(bank.internal),
 }));
 
 function searchBanks(query, limit = 8) {
@@ -83,7 +87,12 @@ function searchBanks(query, limit = 8) {
     if (short.startsWith(q) || name.startsWith(q)) score = 3;
     else if (short.split(/[\s,&.]+/).some((w) => w.startsWith(q))) score = 2;
     else if (short.includes(q) || name.includes(q)) score = 1;
-    if (score >= 0) scored.push({ score, bank });
+    if (score >= 0) {
+      // Our own institution first: an internal transfer is the one case where
+      // the recipient name is verifiable from the Northvale ledger itself.
+      if (bank.internal) score += 4;
+      scored.push({ score, bank });
+    }
   }
   scored.sort((a, b) => b.score - a.score || a.bank.shortName.localeCompare(b.bank.shortName));
   return scored.slice(0, limit).map((entry) => entry.bank);
