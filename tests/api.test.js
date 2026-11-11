@@ -377,3 +377,91 @@ test('administrator can monitor transactions, alerts, reconciliation and audit l
   const actions = (audit.json.logs || audit.json.auditLogs || []).map((entry) => entry.action);
   assert.ok(actions.includes('account.registered'), 'registration must be audited');
 });
+
+test('fast registration accepts only name, email, phone and password', async () => {
+  const request = makeClient();
+  const res = await request('/api/auth/register', {
+    method: 'POST',
+    body: {
+      name: 'Marcus Hale',
+      email: 'marcus.hale@example.com',
+      phone: '+1 (312) 555-0177',
+      password: 'Prairie&Steel#31',
+      consent: true,
+    },
+  });
+  assert.equal(res.status, 201, res.text);
+  const account = accountOf(res.json);
+  assert.match(String(account.accountNumber), /^\d{10}$/);
+  assert.equal(res.json.user.firstName, 'Marcus');
+  assert.equal(res.json.user.lastName, 'Hale');
+  assert.equal(res.json.user.profileComplete, false, 'address and DOB are deferred');
+  assert.equal(res.json.user.pinSet, false, 'PIN is optional at signup');
+  assert.equal(account.accountType || account.type, 'checking', 'account type defaults to checking');
+});
+
+test('customers complete address and date of birth after opening an account', async () => {
+  const request = makeClient();
+  const login = await request('/api/auth/login', {
+    method: 'POST',
+    body: { email: 'marcus.hale@example.com', password: 'Prairie&Steel#31' },
+  });
+  assert.equal(login.status, 200, login.text);
+
+  const res = await request('/api/account/profile', {
+    method: 'PATCH',
+    body: {
+      phone: '+1 (312) 555-0188',
+      dob: '1988-03-14',
+      address: {
+        line1: '88 Wacker Drive',
+        line2: 'Suite 400',
+        city: 'Chicago',
+        state: 'IL',
+        postalCode: '60601',
+      },
+    },
+  });
+  assert.equal(res.status, 200, res.text);
+  assert.equal(res.json.user.profileComplete, true);
+
+  const session = await request('/api/auth/session');
+  assert.equal(session.status, 200);
+  assert.equal(session.json.user.address.city, 'Chicago');
+  assert.equal(session.json.user.dob, '1988-03-14');
+  assert.equal(session.json.user.profileComplete, true);
+
+  const invalid = await request('/api/account/profile', {
+    method: 'PATCH',
+    body: { address: { line1: '', city: 'Chicago', state: 'ZZ', postalCode: '60601' } },
+  });
+  assert.equal(invalid.status, 400, 'invalid state must be rejected');
+});
+
+test('administrators search customers by name and account number', async () => {
+  const admin = makeClient();
+  const login = await admin('/api/auth/login', {
+    method: 'POST',
+    body: { email: 'admin@northvale.com', password: 'Admin#2026' },
+  });
+  assert.equal(login.status, 200, login.text);
+
+  const byName = await admin('/api/admin/customers?q=marcus');
+  assert.equal(byName.status, 200);
+  assert.ok(
+    byName.json.customers.some((customer) => customer.email === 'marcus.hale@example.com'),
+    'name search should find the new customer',
+  );
+
+  const accountNumber = db
+    .prepare('SELECT a.account_number FROM accounts a JOIN users u ON u.id = a.user_id WHERE u.email = ?')
+    .get('marcus.hale@example.com').account_number;
+  const byAccount = await admin(`/api/admin/customers?q=${accountNumber}`);
+  assert.equal(byAccount.status, 200);
+  assert.ok(
+    byAccount.json.customers.some(
+      (customer) => (customer.accountNumber || customer.account_number) === accountNumber,
+    ),
+    'account number search should find the same customer',
+  );
+});
