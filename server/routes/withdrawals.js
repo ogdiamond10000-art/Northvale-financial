@@ -12,6 +12,7 @@ const {
 } = require('../services/ledger');
 const { lookupRecipient } = require('../services/lookup');
 const { evaluateOutgoing, recordAlerts } = require('../services/fraud');
+const { assertOutgoingAllowed } = require('../services/system');
 const { recordAudit, notify } = require('../services/audit');
 const { parseAmountToCents, formatUSD } = require('../money');
 const { badRequest, conflict, asyncHandler } = require('../errors');
@@ -48,6 +49,7 @@ router.get('/methods', requireAuth, (req, res) => {
 
 router.post('/', requireAuth, requireActiveAccount, requireVerified, asyncHandler(async (req, res) => {
   const body = req.body || {};
+  assertOutgoingAllowed({ internal: false });
   const method = METHODS.find((entry) => entry.id === body.method);
   if (!method) throw badRequest('Select a withdrawal method.', 'method_invalid');
 

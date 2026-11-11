@@ -16,6 +16,7 @@ const {
 } = require('../services/ledger');
 const { lookupRecipient } = require('../services/lookup');
 const { evaluateOutgoing, recordAlerts } = require('../services/fraud');
+const { getControls, assertOutgoingAllowed } = require('../services/system');
 const { recordAudit, notify } = require('../services/audit');
 const { parseAmountToCents, formatUSD } = require('../money');
 const { badRequest, conflict, notFound, AppError, asyncHandler } = require('../errors');
@@ -24,6 +25,10 @@ const router = express.Router();
 
 router.post('/', requireAuth, requireActiveAccount, requireVerified, asyncHandler(async (req, res) => {
   const body = req.body || {};
+  const controls = getControls();
+  // Global kill switch: blocks every transfer, including between Northvale accounts.
+  if (!controls.transfersEnabled) assertOutgoingAllowed({ internal: false });
+
   const amountCents = parseAmountToCents(body.amount);
   validateAmount(amountCents, {
     min: config.limits.minTransferCents,
@@ -71,6 +76,9 @@ router.post('/', requireAuth, requireActiveAccount, requireVerified, asyncHandle
   if (internalAccount && internalAccount.id === req.account.id) {
     throw badRequest('You cannot transfer to the same account.', 'same_account');
   }
+
+  // Outgoing pause stops transfers to other institutions; internal stays available.
+  if (!internalAccount) assertOutgoingAllowed({ internal: false });
 
   const fraud = evaluateOutgoing({
     userId: req.user.id,
@@ -123,13 +131,15 @@ router.post('/', requireAuth, requireActiveAccount, requireVerified, asyncHandle
 
   // External transfers are queued: funds are held until settlement is confirmed.
   const requiresReview = fraud.requiresReview;
+  // Operators can force every new external transfer onto a manual hold.
+  const queuedStatus = controls.holdNewExternal ? 'on_hold' : 'pending';
   const tx = insertTransaction({
     user_id: req.user.id,
     account_id: req.account.id,
     type: 'transfer_out',
     direction: 'debit',
     amount_cents: amountCents,
-    status: 'pending',
+    status: queuedStatus,
     description: description || `External transfer to ${lookup.name || 'recipient'}`,
     channel: 'external',
     method: 'ach',
@@ -145,12 +155,13 @@ router.post('/', requireAuth, requireActiveAccount, requireVerified, asyncHandle
       requiresReview,
       reviewReason: requiresReview ? 'High-risk transfer rules' : null,
       internalRecipient: false,
+      ...(controls.holdNewExternal ? { holdReason: 'Placed on hold by operations policy for verification' } : {}),
     },
   });
 
   recordAlerts({ userId: req.user.id, transactionId: tx.id, alerts: fraud.alerts });
   notify(req.user.id, {
-    title: requiresReview ? 'Transfer held for review' : 'Transfer submitted',
+    title: requiresReview || controls.holdNewExternal ? 'Transfer held for review' : 'Transfer submitted',
     body: requiresReview
       ? `Your ${formatUSD(amountCents)} transfer is on hold while our fraud team reviews it. Reference ${tx.reference}.`
       : `Your ${formatUSD(amountCents)} transfer was submitted and is awaiting settlement. Reference ${tx.reference}.`,
@@ -169,9 +180,9 @@ router.post('/', requireAuth, requireActiveAccount, requireVerified, asyncHandle
   res.status(201).json({
     transaction: serializeTransaction(tx),
     lookup,
-    status: 'pending',
-    message: requiresReview
-      ? 'Transfer submitted and held for fraud review. Funds are on hold until the review completes.'
+    status: tx.status,
+    message: requiresReview || controls.holdNewExternal
+      ? 'Transfer submitted and held for operations review. Funds are on hold until the review completes.'
       : 'Transfer submitted. Funds are on hold until the receiving institution confirms settlement.',
     receiptUrl: `/api/account/transactions/${tx.id}/receipt`,
   });

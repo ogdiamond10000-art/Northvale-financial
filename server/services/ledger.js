@@ -26,7 +26,7 @@ function accountByNumber(accountNumber) {
 function pendingDebitsCents(accountId) {
   const row = db
     .prepare(
-      "SELECT COALESCE(SUM(amount_cents), 0) AS total FROM transactions WHERE account_id = ? AND direction = 'debit' AND status = 'pending'",
+      "SELECT COALESCE(SUM(amount_cents), 0) AS total FROM transactions WHERE account_id = ? AND direction = 'debit' AND status IN ('pending', 'on_hold')",
     )
     .get(accountId);
   return row.total;
@@ -35,7 +35,7 @@ function pendingDebitsCents(accountId) {
 function pendingCreditsCents(accountId) {
   const row = db
     .prepare(
-      "SELECT COALESCE(SUM(amount_cents), 0) AS total FROM transactions WHERE account_id = ? AND direction = 'credit' AND status = 'pending'",
+      "SELECT COALESCE(SUM(amount_cents), 0) AS total FROM transactions WHERE account_id = ? AND direction = 'credit' AND status IN ('pending', 'on_hold')",
     )
     .get(accountId);
   return row.total;
@@ -186,10 +186,10 @@ function listTransactions(accountId, options = {}) {
   return { rows, total, limit, offset };
 }
 
-const settleTransactionTx = db.transaction((txId, { actorId, note } = {}) => {
+const settleTransactionTx = db.transaction((txId, { actorId, note, fromStatuses = ['pending'] } = {}) => {
   const row = getTransaction(txId);
   if (!row) throw new AppError(404, 'Transaction not found.', 'not_found');
-  if (row.status !== 'pending') {
+  if (!fromStatuses.includes(row.status)) {
     throw new AppError(409, 'Only pending transactions can be settled.', 'not_pending');
   }
   const account = accountById(row.account_id);
@@ -246,6 +246,98 @@ const failTransactionTx = db.transaction((txId, { actorId, reason, nextStatus = 
 
 function failTransaction(txId, options) {
   return failTransactionTx(txId, options);
+}
+
+/**
+ * Moves a pending transaction onto an operations hold. The funds stay committed
+ * (available balance already nets holds) but nothing settles until an operator
+ * releases it after verification.
+ */
+const holdTransactionTx = db.transaction((txId, { actorId, reason } = {}) => {
+  const row = getTransaction(txId);
+  if (!row) throw new AppError(404, 'Transaction not found.', 'not_found');
+  if (row.status !== 'pending') {
+    throw new AppError(409, 'Only pending transactions can be placed on hold.', 'not_holdable');
+  }
+  let metadata = {};
+  try {
+    metadata = row.metadata ? JSON.parse(row.metadata) : {};
+  } catch {
+    metadata = {};
+  }
+  const now = nowIso();
+  metadata.holdReason = String(reason || 'Held for operations verification').slice(0, 200);
+  metadata.heldBy = actorId || null;
+  metadata.heldAt = now;
+  db.prepare("UPDATE transactions SET status = 'on_hold', updated_at = ?, metadata = ? WHERE id = ?").run(
+    now,
+    JSON.stringify(metadata),
+    txId,
+  );
+  return getTransaction(txId);
+});
+
+function holdTransaction(txId, options) {
+  return holdTransactionTx(txId, options);
+}
+
+/** Releases a hold by settling the transaction through the normal ledger path. */
+function releaseTransaction(txId, options = {}) {
+  const row = getTransaction(txId);
+  if (!row) throw new AppError(404, 'Transaction not found.', 'not_found');
+  if (row.status !== 'on_hold') {
+    throw new AppError(409, 'Only transactions on hold can be released.', 'not_on_hold');
+  }
+  return settleTransactionTx(txId, { ...options, fromStatuses: ['on_hold'] });
+}
+
+/**
+ * Documented, auditable balance adjustment. Writes a completed ledger entry so
+ * the customer sees the movement in their history and the reason is preserved.
+ */
+const adjustBalanceTx = db.transaction(({ accountId, amountCents, reason, actorId, actorEmail, ticket } = {}) => {
+  const account = accountById(accountId);
+  if (!account) throw new AppError(404, 'Account not found.', 'not_found');
+  if (!Number.isInteger(amountCents) || amountCents === 0) {
+    throw new AppError(400, 'Enter a non-zero adjustment amount.', 'amount_invalid');
+  }
+  const note = String(reason || '').trim();
+  if (note.length < 8) {
+    throw new AppError(400, 'Document the reason for this adjustment (at least 8 characters).', 'reason_required');
+  }
+  const before = account.balance_cents;
+  const after = before + amountCents;
+  if (after < 0) {
+    throw new AppError(409, 'The adjustment would overdraw the account.', 'insufficient_funds');
+  }
+  db.prepare('UPDATE accounts SET balance_cents = ? WHERE id = ?').run(after, accountId);
+  const now = nowIso();
+  const transaction = insertTransaction({
+    user_id: account.user_id,
+    account_id: account.id,
+    type: 'adjustment',
+    direction: amountCents > 0 ? 'credit' : 'debit',
+    amount_cents: Math.abs(amountCents),
+    status: 'completed',
+    description: `Balance adjustment — ${note}`,
+    channel: 'internal',
+    method: 'adjustment',
+    settled_at: now,
+    metadata: {
+      adjustment: true,
+      reason: note,
+      ticket: ticket ? String(ticket).slice(0, 60) : null,
+      balanceBeforeCents: before,
+      balanceAfterCents: after,
+      adjustedBy: actorId || null,
+      adjustedByEmail: actorEmail || null,
+    },
+  });
+  return { transaction, balanceBeforeCents: before, balanceAfterCents: after };
+});
+
+function adjustBalance(options) {
+  return adjustBalanceTx(options);
 }
 
 const internalTransferTx = db.transaction(({ fromAccount, toAccount, amountCents, description, recipientName, channel = 'internal' }) => {
@@ -312,6 +404,9 @@ module.exports = {
   getTransaction,
   getTransactionForUser,
   listTransactions,
+  holdTransaction,
+  releaseTransaction,
+  adjustBalance,
   settleTransaction,
   failTransaction,
   internalTransfer: (payload) => internalTransferTx(payload),

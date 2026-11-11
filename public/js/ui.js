@@ -117,8 +117,9 @@ export function icon(name, cls = '') {
 /* ------------------------------ components ------------------------------ */
 
 export function statusBadge(status) {
-  const map = { completed: 'success', pending: 'pending', failed: 'failed', cancelled: 'cancelled' };
-  return `<span class="badge ${map[status] || 'info'}">${esc(titleCase(status))}</span>`;
+  const map = { completed: 'success', pending: 'pending', on_hold: 'pending', failed: 'failed', cancelled: 'cancelled', reversed: 'info' };
+  const label = status === 'on_hold' ? 'On hold' : titleCase(status);
+  return `<span class="badge ${map[status] || 'info'}">${esc(label)}</span>`;
 }
 
 export function kycBadge(status) {
