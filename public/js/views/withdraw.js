@@ -24,6 +24,18 @@ export async function renderWithdraw(page, ctx) {
   const account = ctx.state.account || {};
   const user = ctx.state.user || {};
 
+  const controls = await api
+    .get('/api/system/controls')
+    .then((data) => data.controls || {})
+    .catch(() => ({ transfersEnabled: true, outgoingPaused: false, message: '' }));
+  const controlsNotice = !controls.transfersEnabled
+    ? ui.notice('danger', controls.message || 'Money movement is temporarily unavailable.', { strong: 'Withdrawals are paused.' })
+    : controls.outgoingPaused
+      ? ui.notice('warn', controls.message || 'Outgoing transfers and withdrawals are temporarily paused.', {
+          strong: 'Withdrawals are paused.',
+        })
+      : '';
+
   page.innerHTML = `<div class="flow-wrap">
     <div class="flow-main">
       <div class="section-head">
@@ -32,6 +44,7 @@ export async function renderWithdraw(page, ctx) {
           <p>Choose a payout method, verify the destination account, then approve with your PIN.</p>
         </div>
       </div>
+      ${controlsNotice}
       <div id="flow-body"><div class="skeleton" style="height:240px"></div></div>
     </div>
     <aside class="flow-aside">

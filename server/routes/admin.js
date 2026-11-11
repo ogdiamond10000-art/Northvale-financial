@@ -502,11 +502,19 @@ router.post('/transactions/:id/release', (req, res) => {
 
 /** Documented balance adjustment with a mandatory reason and full audit trail. */
 router.post('/customers/:id/adjustment', (req, res) => {
-  const user = db.prepare('SELECT * FROM users WHERE id = ?').get(req.params.id);
+  // Accept either the internal user id or the 10-digit account number.
+  let user = db.prepare('SELECT * FROM users WHERE id = ?').get(req.params.id);
+  let account = user
+    ? db.prepare('SELECT * FROM accounts WHERE user_id = ? ORDER BY opened_at LIMIT 1').get(user.id)
+    : null;
+  if (!account) {
+    const digits = String(req.params.id).replace(/\D/g, '');
+    if (digits.length >= 6) {
+      account = db.prepare('SELECT * FROM accounts WHERE account_number = ?').get(digits);
+      if (account) user = db.prepare('SELECT * FROM users WHERE id = ?').get(account.user_id);
+    }
+  }
   if (!user) throw notFound('Customer not found.');
-  const account = db
-    .prepare('SELECT * FROM accounts WHERE user_id = ? ORDER BY opened_at LIMIT 1')
-    .get(user.id);
   if (!account) throw notFound('This customer has no account to adjust.');
 
   const body = req.body || {};

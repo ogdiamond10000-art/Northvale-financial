@@ -4,6 +4,48 @@ import { navigate } from '../router.js';
 
 const STEP_LABELS = ['Recipient', 'Amount & details', 'Review & approve'];
 
+const PROCESS_STEPS = [
+  'Verifying recipient details',
+  'Contacting the receiving institution',
+  'Recording the transaction in the ledger',
+];
+
+/** Professional blocking animation shown while the server processes the transfer. */
+function showProcessing() {
+  const overlay = document.createElement('div');
+  overlay.className = 'processing-overlay';
+  overlay.setAttribute('role', 'alertdialog');
+  overlay.setAttribute('aria-live', 'assertive');
+  overlay.innerHTML = `<div class="proc-card">
+      <div class="proc-ring"><span></span><span></span><span></span></div>
+      <strong>Processing your transfer</strong>
+      <p class="proc-status">${ui.esc(PROCESS_STEPS[0])}…</p>
+      <ul class="proc-steps">${PROCESS_STEPS.map(
+        (label, index) => `<li class="${index === 0 ? 'is-active' : ''}">${ui.esc(label)}</li>`,
+      ).join('')}</ul>
+      <p class="proc-foot">Do not close this window. Your transfer is reported as successful only after Northvale confirms it.</p>
+    </div>`;
+  document.body.appendChild(overlay);
+
+  const status = overlay.querySelector('.proc-status');
+  const items = [...overlay.querySelectorAll('.proc-steps li')];
+  let index = 0;
+  const timer = setInterval(() => {
+    index = Math.min(index + 1, PROCESS_STEPS.length - 1);
+    items.forEach((el, i) => {
+      el.classList.toggle('is-active', i === index);
+      el.classList.toggle('is-done', i < index);
+    });
+    status.textContent = `${PROCESS_STEPS[index]}…`;
+  }, 900);
+
+  return () => {
+    clearInterval(timer);
+    overlay.classList.add('is-leaving');
+    setTimeout(() => overlay.remove(), 180);
+  };
+}
+
 function freshState() {
   return {
     step: 1,
@@ -26,6 +68,20 @@ export async function renderTransfer(page, ctx) {
   const user = ctx.state.user || {};
   const account = ctx.state.account || {};
 
+  const controls = await api
+    .get('/api/system/controls')
+    .then((data) => data.controls || {})
+    .catch(() => ({ transfersEnabled: true, outgoingPaused: false, message: '' }));
+  const controlsNotice = !controls.transfersEnabled
+    ? ui.notice('danger', controls.message || 'Money movement is temporarily unavailable.', { strong: 'Transfers are paused.' })
+    : controls.outgoingPaused
+      ? ui.notice(
+          'warn',
+          controls.message || 'Outgoing transfers to other institutions are temporarily paused. Transfers between Northvale accounts still settle instantly.',
+          { strong: 'Outgoing transfers paused.' },
+        )
+      : '';
+
   page.innerHTML = `<div class="flow-wrap">
     <div class="flow-main">
       <div class="section-head">
@@ -34,6 +90,7 @@ export async function renderTransfer(page, ctx) {
           <p>Verified recipients, reviewed details and a transaction PIN for every payment.</p>
         </div>
       </div>
+      ${controlsNotice}
       <div id="flow-body"></div>
     </div>
     <aside class="flow-aside">
@@ -474,6 +531,7 @@ export async function renderTransfer(page, ctx) {
         return;
       }
       ui.busy(button, true, 'Submitting…');
+      const stopProcessing = showProcessing();
       try {
         const data = await api.post('/api/transfers', {
           bankId: state.bank.id,
@@ -495,6 +553,7 @@ export async function renderTransfer(page, ctx) {
         ui.toast(message, 'error');
         if (error instanceof ApiError && error.code === 'pin_incorrect') pinInput.value = '';
       } finally {
+        stopProcessing();
         ui.busy(button, false);
       }
     });
@@ -528,6 +587,14 @@ export async function renderTransfer(page, ctx) {
       Object.assign(state, freshState());
       drawRecipient();
     });
+  }
+
+  if (!controls.transfersEnabled) {
+    body.innerHTML = `<div class="card">
+      ${ui.notice('danger', controls.message || 'Money movement is temporarily unavailable.', { strong: 'Transfers are paused.' })}
+      <p class="muted" style="margin-top:14px">No funds have left your account. Transfers already submitted continue to be reviewed by operations.</p>
+    </div>`;
+    return;
   }
 
   drawRecipient();

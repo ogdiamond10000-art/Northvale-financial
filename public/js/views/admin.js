@@ -3,6 +3,7 @@ import * as ui from '../ui.js';
 
 const TABS = [
   { id: 'overview', label: 'Overview' },
+  { id: 'controls', label: 'Controls' },
   { id: 'customers', label: 'Customers' },
   { id: 'transactions', label: 'Transactions' },
   { id: 'alerts', label: 'Fraud alerts' },
@@ -56,6 +57,7 @@ export async function renderAdmin(page, ctx, route = {}) {
       if (tab === 'reconciliation' && (force || !loaded.reconciliation)) loaded.reconciliation = await api.get('/api/admin/reconciliation');
       if (tab === 'audit' && (force || !loaded.audit)) loaded.audit = await api.get('/api/admin/audit-logs');
       if (tab === 'payments' && (force || !loaded.payments)) loaded.payments = await api.get('/api/admin/payments');
+      if (tab === 'controls' && (force || !loaded.controls)) loaded.controls = await api.get('/api/admin/controls');
       render();
     } catch (error) {
       body.innerHTML = ui.notice('danger', error instanceof ApiError ? error.message : 'Console data could not be loaded.');
@@ -75,6 +77,7 @@ export async function renderAdmin(page, ctx, route = {}) {
     if (tab === 'reconciliation') renderReconciliation(loaded.reconciliation || {});
     if (tab === 'audit') renderAudit(loaded.audit || { logs: [] });
     if (tab === 'payments') renderPayments(loaded.payments || {});
+    if (tab === 'controls') renderControls(loaded.controls || {});
   }
 
   function renderPayments(data) {
@@ -254,6 +257,141 @@ export async function renderAdmin(page, ctx, route = {}) {
         ui.toast(error instanceof ApiError ? error.message : 'Directory test failed.', 'error');
       } finally {
         ui.busy(button, false);
+      }
+    });
+  }
+
+  function renderControls(data) {
+    const c = data.controls || {};
+    const recent = data.recent || [];
+    body.innerHTML = `<div class="controls-grid">
+      <div class="card">
+        <div class="card-head"><div><h3>Money movement</h3><p class="card-sub">Enforced on the server for every customer request, not just hidden in the interface.</p></div></div>
+        <label class="switch-row">
+          <input type="checkbox" data-control="transfersEnabled" ${c.transfersEnabled ? 'checked' : ''} />
+          <span class="switch" aria-hidden="true"></span>
+          <span class="switch-text"><strong>Transfers enabled</strong><span>Off blocks every transfer, including between Northvale accounts, plus all withdrawals.</span></span>
+        </label>
+        <label class="switch-row">
+          <input type="checkbox" data-control="outgoingPaused" ${c.outgoingPaused ? 'checked' : ''} />
+          <span class="switch" aria-hidden="true"></span>
+          <span class="switch-text"><strong>Pause outgoing transfers</strong><span>Blocks transfers to other institutions and withdrawals. Internal Northvale transfers still settle.</span></span>
+        </label>
+        <label class="switch-row">
+          <input type="checkbox" data-control="holdNewExternal" ${c.holdNewExternal ? 'checked' : ''} />
+          <span class="switch" aria-hidden="true"></span>
+          <span class="switch-text"><strong>Hold new external transfers</strong><span>Every new external transfer is created on hold and waits for an operator release.</span></span>
+        </label>
+        <div class="field" style="margin-top:8px"><label for="ctrl-message">Customer-facing message</label>
+          <textarea class="input" id="ctrl-message" rows="2" maxlength="240" placeholder="Shown in the app while movement is restricted">${ui.esc(c.message || '')}</textarea>
+          <span class="hint">Leave blank to use Northvale's standard wording.</span>
+        </div>
+        <div class="row" style="margin-top:16px;gap:12px;flex-wrap:wrap">
+          <span class="muted" style="font-size:13px">${c.updatedAt ? `Last changed ${ui.esc(ui.fmtDate(c.updatedAt, { timeStyle: 'short' }))}${c.updatedBy ? ` by ${ui.esc(c.updatedBy)}` : ''}` : 'No changes recorded yet.'}</span>
+          <div class="spacer"></div>
+          <button class="btn btn-primary" type="button" data-save-controls>${ui.icon('check')} Save controls</button>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-head"><div><h3>Documented balance adjustment</h3><p class="card-sub">A reason is mandatory. The adjustment posts to the ledger, notifies the customer and is written to the audit log.</p></div></div>
+        <form id="adj-form" novalidate>
+          <div class="field" data-field="account"><label for="adj-account">Account number</label>
+            <input class="input tabular" id="adj-account" name="account" inputmode="numeric" maxlength="12" placeholder="10-digit account number" />
+            <span class="hint">Copy it from the Customers tab.</span>
+          </div>
+          <div class="field" data-field="direction"><label for="adj-direction">Direction</label>
+            <select class="select" id="adj-direction" name="direction"><option value="credit">Credit — add funds</option><option value="debit">Debit — remove funds</option></select>
+          </div>
+          <div class="field" data-field="amount"><label for="adj-amount">Amount</label>
+            <div class="amount-wrap"><span class="amount-prefix">$</span><input class="input amount-input tabular" id="adj-amount" name="amount" inputmode="decimal" placeholder="0.00" /></div>
+          </div>
+          <div class="field" data-field="reason"><label for="adj-reason">Reason</label>
+            <input class="input" id="adj-reason" name="reason" maxlength="200" placeholder="e.g. Reversal of duplicate ACH debit" />
+          </div>
+          <div class="field" data-field="ticket"><label for="adj-ticket">Ticket reference (optional)</label>
+            <input class="input" id="adj-ticket" name="ticket" maxlength="60" placeholder="FIN-4471" />
+          </div>
+          <div class="row" style="margin-top:14px"><div class="spacer"></div><button class="btn btn-primary" type="submit">Post adjustment</button></div>
+        </form>
+      </div>
+    </div>
+
+    <div class="card" style="margin-top:18px">
+      <div class="card-head"><div><h3>Recent control activity</h3><p class="card-sub">Every switch change, hold, release and adjustment is recorded.</p></div></div>
+      ${recent.length
+        ? `<div class="tx-table admin-table compact">
+            <div class="tx-head"><span>Action</span><span>Actor</span><span>When</span><span></span></div>
+            ${recent
+              .map(
+                (row) => `<div class="tx-line">
+                  <span class="tx-main"><span class="tx-avatar">${ui.icon('shield')}</span><span class="tx-main-text"><strong>${ui.esc(row.action)}</strong><span>${ui.esc(row.metadata?.reason || row.metadata?.note || row.metadata?.message || '')}</span></span></span>
+                  <span>${ui.esc(row.actorEmail || 'system')}</span>
+                  <span class="tabular">${ui.esc(ui.fmtDate(row.createdAt, { timeStyle: 'short' }))}</span>
+                  <span></span>
+                </div>`,
+              )
+              .join('')}
+          </div>`
+        : ui.emptyState({ title: 'No control activity yet', body: 'Switch changes and adjustments appear here.', iconName: 'list' })}
+    </div>`;
+
+    const saveButton = body.querySelector('[data-save-controls]');
+    saveButton.addEventListener('click', async () => {
+      ui.busy(saveButton, true, 'Saving…');
+      try {
+        const payload = {};
+        body.querySelectorAll('[data-control]').forEach((input) => {
+          payload[input.dataset.control] = input.checked;
+        });
+        payload.message = body.querySelector('#ctrl-message').value;
+        const fresh = await api.patch('/api/admin/controls', payload);
+        loaded.controls = fresh;
+        ui.toast('Controls saved and audited.', 'success');
+        renderControls(fresh);
+      } catch (error) {
+        ui.toast(error instanceof ApiError ? error.message : 'Controls could not be saved.', 'error');
+        ui.busy(saveButton, false);
+      }
+    });
+
+    const form = body.querySelector('#adj-form');
+    form.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      ui.clearErrors(form);
+      const accountNumber = form.querySelector('#adj-account').value.replace(/\D/g, '');
+      const amount = form.querySelector('#adj-amount').value.replace(/[$,]/g, '').trim();
+      const reason = form.querySelector('#adj-reason').value.trim();
+      let invalid = false;
+      if (accountNumber.length < 6) {
+        ui.setFieldError(form, 'account', 'Enter the customer account number.');
+        invalid = true;
+      }
+      if (!amount || !(Number(amount) > 0)) {
+        ui.setFieldError(form, 'amount', 'Enter an amount greater than zero.');
+        invalid = true;
+      }
+      if (reason.length < 8) {
+        ui.setFieldError(form, 'reason', 'Document the reason (at least 8 characters).');
+        invalid = true;
+      }
+      if (invalid) return;
+
+      const submit = form.querySelector('button[type="submit"]');
+      ui.busy(submit, true, 'Posting…');
+      try {
+        const result = await api.post(`/api/admin/customers/${encodeURIComponent(accountNumber)}/adjustment`, {
+          direction: form.querySelector('#adj-direction').value,
+          amount,
+          reason,
+          ticket: form.querySelector('#adj-ticket').value.trim(),
+        });
+        ui.toast(result.message || 'Adjustment posted.', 'success');
+        form.reset();
+        await load(true);
+      } catch (error) {
+        ui.toast(error instanceof ApiError ? error.message : 'The adjustment could not be posted.', 'error');
+        ui.busy(submit, false);
       }
     });
   }
@@ -642,6 +780,36 @@ export async function renderAdmin(page, ctx, route = {}) {
         }
       }),
     );
+    host.querySelectorAll('[data-hold]').forEach((button) =>
+      button.addEventListener('click', async () => {
+        ui.busy(button, true, 'Holding…');
+        try {
+          await api.post(`/api/admin/transactions/${encodeURIComponent(button.dataset.hold)}/hold`, {
+            reason: 'Held by operations for verification.',
+          });
+          ui.toast('Transaction placed on hold.', 'success');
+          await refreshFn();
+        } catch (error) {
+          ui.toast(error instanceof ApiError ? error.message : 'Hold failed.', 'error');
+          ui.busy(button, false);
+        }
+      }),
+    );
+    host.querySelectorAll('[data-release]').forEach((button) =>
+      button.addEventListener('click', async () => {
+        ui.busy(button, true, 'Releasing…');
+        try {
+          await api.post(`/api/admin/transactions/${encodeURIComponent(button.dataset.release)}/release`, {
+            note: 'Verified and released by operations.',
+          });
+          ui.toast('Hold released and transaction settled.', 'success');
+          await refreshFn();
+        } catch (error) {
+          ui.toast(error instanceof ApiError ? error.message : 'Release failed.', 'error');
+          ui.busy(button, false);
+        }
+      }),
+    );
   }
 
   await load();
@@ -664,7 +832,8 @@ function adminTxTable(rows, { showCustomer = false, actions = false, compact = f
           <span class="tabular">${ui.esc(tx.amount || '')}</span>
           <span>${ui.statusBadge(tx.status)}</span>
           <span class="ta-right row" style="gap:6px;justify-content:flex-end">
-            ${actions && tx.status === 'pending' ? `<button class="btn btn-quiet btn-sm" type="button" data-settle="${ui.esc(tx.id)}">Settle</button><button class="btn btn-quiet btn-sm" type="button" data-fail="${ui.esc(tx.id)}">Fail</button>` : ''}
+            ${actions && tx.status === 'pending' ? `<button class="btn btn-quiet btn-sm" type="button" data-hold="${ui.esc(tx.id)}">Hold</button><button class="btn btn-quiet btn-sm" type="button" data-settle="${ui.esc(tx.id)}">Settle</button><button class="btn btn-quiet btn-sm" type="button" data-fail="${ui.esc(tx.id)}">Fail</button>` : ''}
+            ${actions && tx.status === 'on_hold' ? `<button class="btn btn-primary btn-sm" type="button" data-release="${ui.esc(tx.id)}">Release</button>` : ''}
           </span>
         </div>`,
       )
