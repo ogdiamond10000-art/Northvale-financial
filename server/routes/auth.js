@@ -56,23 +56,36 @@ router.post('/register', registerLimiter, (req, res) => {
   const address = body.address || {};
   const identity = body.identity || {};
 
-  const firstName = validate.name(body.firstName, 'First name');
-  const lastName = validate.name(body.lastName, 'Last name');
+  // Fast path: one full name is enough to open an account. Address, date of
+  // birth and identity documents can be completed later from Profile & security.
+  let firstName;
+  let lastName;
+  if (!body.firstName && body.name) {
+    const parts = String(body.name).trim().split(/\s+/).filter(Boolean);
+    if (parts.length < 2) {
+      throw badRequest('Enter your first and last name.', 'name_incomplete', { field: 'name' });
+    }
+    firstName = validate.name(parts[0], 'First name');
+    lastName = validate.name(parts.slice(1).join(' '), 'Last name');
+  } else {
+    firstName = validate.name(body.firstName, 'First name');
+    lastName = validate.name(body.lastName, 'Last name');
+  }
   const email = validate.email(body.email);
   const phone = validate.phone(body.phone);
-  const line1 = validate.text(address.line1, 'Street address', { max: 120 });
-  const line2 = address.line2 ? validate.text(address.line2, 'Address line 2', { max: 120 }) : null;
-  const city = validate.text(address.city, 'City', { max: 80 });
-  const state = validate.state(address.state);
-  const postalCode = validate.postalCode(address.postalCode);
-  const dateOfBirth = validate.dob(body.dob);
+  const line1 = validate.optional(address.line1, (value) => validate.text(value, 'Street address', { max: 120 })) || '';
+  const line2 = validate.optional(address.line2, (value) => validate.text(value, 'Address line 2', { max: 120 }));
+  const city = validate.optional(address.city, (value) => validate.text(value, 'City', { max: 80 })) || '';
+  const state = validate.optional(address.state, validate.state) || '';
+  const postalCode = validate.optional(address.postalCode, validate.postalCode) || '';
+  const dateOfBirth = validate.optional(body.dob, validate.dob) || '';
   const password = validate.password(body.password);
-  const accountType = validate.accountType(body.accountType);
-  const ssnLast4 = validate.ssnLast4(identity.ssnLast4);
+  const accountType = validate.optional(body.accountType, validate.accountType) || 'checking';
+  const ssnLast4 = validate.optional(identity.ssnLast4, validate.ssnLast4);
   const idType = ['drivers_license', 'state_id', 'passport', 'us_passport'].includes(identity.idType)
     ? identity.idType
-    : 'drivers_license';
-  const transactionPin = validate.pin(body.pin, { required: true });
+    : null;
+  const transactionPin = validate.pin(body.pin, { required: false });
   if (body.consent !== true) {
     throw badRequest('You must accept the account agreement and electronic disclosures.', 'consent_required');
   }
@@ -107,7 +120,7 @@ router.post('/register', registerLimiter, (req, res) => {
       ssnLast4,
       idType,
       hashSecret(password),
-      hashSecret(transactionPin),
+      transactionPin ? hashSecret(transactionPin) : null,
       now,
     );
 
@@ -116,9 +129,14 @@ router.post('/register', registerLimiter, (req, res) => {
        VALUES (?, ?, ?, ?, ?, ?, 0, 'active', ?)`,
     ).run(newId('acct'), userId, accountNumber, generateRoutingNumber(), accountType, null, now);
 
+    const profileComplete = Boolean(line1 && city && state && postalCode && dateOfBirth);
     notify(userId, {
       title: 'Welcome to Northvale Financial',
-      body: `Your ${accountType.replace('_', ' ')} account ending ${accountNumber.slice(-4)} is open. Identity verification is now under review.`,
+      body: `Your ${accountType.replace('_', ' ')} account ending ${accountNumber.slice(-4)} is open.${
+        profileComplete
+          ? ' Identity verification is now under review.'
+          : ' Add your address and date of birth in Profile & security to finish verification.'
+      }`,
       kind: 'account',
     });
     notifyAdmins({
@@ -146,7 +164,10 @@ router.post('/register', registerLimiter, (req, res) => {
   res.status(201).json({
     user: publicUser(user),
     account: accountSummary(account),
-    message: 'Account created. Identity verification is under review.',
+    message:
+      line1 && city && state && postalCode && dateOfBirth
+        ? 'Account created. Identity verification is under review.'
+        : 'Account created. Add your address and date of birth in Profile & security to finish verification.',
   });
 });
 

@@ -29,6 +29,10 @@ function publicUser(user) {
     role: user.role,
     kycStatus: user.kyc_status,
     kycNote: user.kyc_note,
+    profileComplete: Boolean(
+      user.address_line1 && user.city && user.state && user.postal_code && user.dob,
+    ),
+    identitySubmitted: Boolean(user.ssn_last4),
     status: user.status,
     twoFactorEnabled: Boolean(user.twofa_enabled),
     pinSet: Boolean(user.pin_hash),

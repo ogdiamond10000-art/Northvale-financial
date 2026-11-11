@@ -127,7 +127,13 @@ function pin(value, { required = false } = {}) {
   return clean;
 }
 
+function optional(value, validator) {
+  if (value === undefined || value === null || String(value).trim() === '') return null;
+  return validator(value);
+}
+
 module.exports = {
+  optional,
   US_STATES,
   ACCOUNT_TYPES,
   text,
