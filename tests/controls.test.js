@@ -204,7 +204,7 @@ test('outgoing pause stops external movement while internal transfers still sett
 
 test('a pending transaction can be held, nets the available balance, then released', async () => {
   const account = demoAccount();
-  const txId = insertTransaction({
+  const created = insertTransaction({
     user_id: account.user_id,
     account_id: account.id,
     type: 'withdrawal',
@@ -215,6 +215,8 @@ test('a pending transaction can be held, nets the available balance, then releas
     channel: 'external',
     method: 'bank',
   });
+  const txId = created.id;
+  assert.ok(txId, 'the pending transaction must be created');
 
   const customer = await signIn('alex.morgan@example.com', DEMO_PASSWORD);
   const before = await customer('/api/account');
@@ -274,14 +276,14 @@ test('documented balance adjustments post to the ledger and are audited', async 
       ticket: 'FIN-4471',
     },
   });
-  assert.equal(credit.status, 200, credit.text);
+  assert.equal(credit.status, 201, credit.text);
   assert.equal(demoBalance(), before + 25000);
 
   const debit = await admin(`/api/admin/customers/${DEMO_ACCOUNT}/adjustment`, {
     method: 'POST',
     body: { direction: 'debit', amount: '50.00', reason: 'Correction of misposted teller credit.' },
   });
-  assert.equal(debit.status, 200, debit.text);
+  assert.equal(debit.status, 201, debit.text);
   assert.equal(demoBalance(), before + 20000);
 
   const overdraw = await admin(`/api/admin/customers/${DEMO_ACCOUNT}/adjustment`, {
