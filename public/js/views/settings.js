@@ -35,6 +35,21 @@ export async function renderSettings(page, ctx) {
           <div><dt>Account status</dt><dd>${ui.esc(ui.titleCase(user.status || 'active'))}</dd></div>
           <div><dt>Last sign-in</dt><dd>${ui.esc(user.lastLoginAt ? ui.fmtDate(user.lastLoginAt, { timeStyle: 'short' }) : 'This session')}</dd></div>
         </dl>
+        <hr class="rule" />
+        <form class="stack" data-profile novalidate>
+          <h4>Update personal details</h4>
+          ${user.profileComplete ? '' : ui.notice('warn', 'Add your residential address and date of birth to finish identity verification.')}
+          <div class="form-grid">
+            ${ui.field({ label: 'Phone number', name: 'phone', type: 'tel', value: user.phone || '', attrs: 'autocomplete="tel"' })}
+            ${ui.field({ label: 'Date of birth', name: 'dob', type: 'date', value: user.dob || '' })}
+            <div class="span-2">${ui.field({ label: 'Street address', name: 'line1', value: address.line1 || '', attrs: 'autocomplete="address-line1"' })}</div>
+            <div class="span-2">${ui.field({ label: 'Address line 2', name: 'line2', value: address.line2 || '', attrs: 'autocomplete="address-line2"' })}</div>
+            ${ui.field({ label: 'City', name: 'city', value: address.city || '', attrs: 'autocomplete="address-level2"' })}
+            ${ui.field({ label: 'State', name: 'state', value: address.state || '', attrs: 'autocomplete="address-level1" maxlength="2"' })}
+            ${ui.field({ label: 'ZIP code', name: 'postalCode', value: address.postalCode || '', attrs: 'autocomplete="postal-code" inputmode="numeric" maxlength="10"' })}
+          </div>
+          <button class="btn btn-primary btn-sm" type="submit">Save personal details</button>
+        </form>
         ${
           user.kycStatus === 'verified'
             ? ui.notice('success', 'Your identity is verified. All account features are available.')
@@ -114,6 +129,38 @@ export async function renderSettings(page, ctx) {
     </div>
 
     <p class="fine-print">Northvale Financial is a financial technology company, not a bank. Banking services are provided by partner institutions once established; deposits are held in custodial accounts.</p>`;
+
+  // Personal details (address, date of birth, phone)
+  const profileForm = page.querySelector('[data-profile]');
+  if (profileForm) {
+    profileForm.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      const values = ui.formValues(profileForm);
+      ui.clearErrors(profileForm);
+      const button = profileForm.querySelector('button[type="submit"]');
+      ui.busy(button, true, 'Saving…');
+      try {
+        const res = await api.patch('/api/account/profile', {
+          phone: values.phone,
+          dob: values.dob,
+          address: {
+            line1: values.line1,
+            line2: values.line2,
+            city: values.city,
+            state: values.state,
+            postalCode: values.postalCode,
+          },
+        });
+        ui.toast(res.message || 'Personal details saved.', 'success');
+        await ctx.refresh();
+        await renderSettings(page, ctx);
+      } catch (error) {
+        if (error instanceof ApiError && error.field) ui.setFieldError(profileForm, error.field, error.message);
+        ui.toast(error instanceof ApiError ? error.message : 'Details could not be saved.', 'error');
+        ui.busy(button, false);
+      }
+    });
+  }
 
   // Identity resubmission
   const identityForm = page.querySelector('[data-identity]');
