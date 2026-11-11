@@ -1,0 +1,21 @@
+{
+  "name": "northvale-financial",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Northvale Financial - a US digital banking platform (technology service, not a bank)",
+  "type": "commonjs",
+  "main": "server/index.js",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "start": "node server/index.js",
+    "dev": "node server/index.js",
+    "build": "node scripts/build.js",
+    "test": "node --test tests/"
+  },
+  "dependencies": {
+    "better-sqlite3": "^11.10.0",
+    "express": "^4.21.2"
+  }
+}
