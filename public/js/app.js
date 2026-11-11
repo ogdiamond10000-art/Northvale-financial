@@ -47,7 +47,7 @@ const ctx = {
     try {
       const data = await api.get('/api/notifications');
       state.notifications = data.notifications || [];
-      state.unreadCount = data.unreadCount || 0;
+      state.unreadCount = data.unread ?? (data.notifications || []).filter((n) => !n.read).length;
     } catch {
       state.notifications = [];
     }
