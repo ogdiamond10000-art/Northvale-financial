@@ -163,6 +163,15 @@ CREATE TABLE IF NOT EXISTS webauthn_credentials (
   last_used_at TEXT
 );
 
+-- Operator-controlled switches (global transfer enable, outgoing pause). Additive
+-- so an existing customer database keeps all of its rows across upgrades.
+CREATE TABLE IF NOT EXISTS system_settings (
+  key TEXT PRIMARY KEY,
+  value TEXT NOT NULL,
+  updated_at TEXT,
+  updated_by TEXT
+);
+
 CREATE TABLE IF NOT EXISTS biometric_challenges (
   id TEXT PRIMARY KEY,
   user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
