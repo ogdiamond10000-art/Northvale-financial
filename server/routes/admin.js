@@ -11,6 +11,7 @@ const {
   accountSummary,
 } = require('../services/ledger');
 const { recordAudit, notify } = require('../services/audit');
+const directory = require('../services/directory');
 const payments = require('../services/payments');
 const { formatUSD } = require('../money');
 const { badRequest, notFound, conflict, asyncHandler } = require('../errors');
@@ -129,6 +130,27 @@ router.get('/overview', (req, res) => {
     })),
   });
 });
+
+router.get('/directory', (req, res) => {
+  res.json({ directory: directory.status() });
+});
+
+router.post(
+  '/directory/test',
+  asyncHandler(async (req, res) => {
+    const result = await directory.testConnection();
+    recordAudit({
+      actorId: req.user.id,
+      actorEmail: req.user.email,
+      action: 'admin.directory_test',
+      targetType: 'system',
+      targetId: 'bank_directory',
+      ip: req.ip,
+      metadata: { ok: result.ok, reason: result.reason || null, latencyMs: result.latencyMs || null },
+    });
+    res.json(result);
+  }),
+);
 
 router.get('/customers', (req, res) => {
   const search = String(req.query.q || '').trim().toLowerCase();
