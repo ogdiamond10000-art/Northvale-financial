@@ -43,7 +43,12 @@ const config = {
     secretKey: process.env.STRIPE_SECRET_KEY || '',
     webhookSecret: process.env.STRIPE_WEBHOOK_SECRET || '',
     publishableKey: process.env.STRIPE_PUBLISHABLE_KEY || '',
-    apiBase: 'https://api.stripe.com/v1',
+    // Stripe Tax: automatic tax + tax ID collection on every checkout session.
+    taxEnabled: process.env.STRIPE_TAX_ENABLED !== 'false',
+    // Default product tax code (general services) used when no specific code is configured.
+    taxCode: process.env.STRIPE_TAX_CODE || 'txcd_10000000',
+    // Optional card processing fee passed to the payer, expressed as a percentage.
+    feePercent: Number(process.env.STRIPE_CARD_FEE_PERCENT || 0),
   },
 
   // External bank directory / recipient name verification provider.
