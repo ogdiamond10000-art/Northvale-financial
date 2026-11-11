@@ -191,20 +191,6 @@ async function loadDemoAccess(root, form, ctx) {
 
 export async function renderRegister(root, ctx) {
   document.title = 'Open an account · Northvale Financial';
-  const draft = {
-    firstName: '',
-    lastName: '',
-    email: '',
-    phone: '',
-    dob: '',
-    address: { line1: '', line2: '', city: '', state: '', postalCode: '' },
-    accountType: 'checking',
-    password: '',
-    pin: '',
-    identity: { ssnLast4: '', idType: 'drivers_license' },
-    consent: false,
-  };
-  let step = 1;
 
   root.innerHTML = `<div class="auth-wrap">
     ${brandAside()}
@@ -215,230 +201,121 @@ export async function renderRegister(root, ctx) {
 
   const card = root.querySelector('#reg-card');
 
-  function stepper() {
-    const labels = ['Your details', 'Account setup', 'Identity verification'];
-    return `<div class="stepper">
-      ${labels
-        .map(
-          (label, index) => `
-        <div class="step ${step === index + 1 ? 'is-active' : ''} ${step > index + 1 ? 'is-done' : ''}">
-          <span class="n">${step > index + 1 ? '✓' : index + 1}</span><span>${label}</span>
+  card.innerHTML = `<div class="card-head"><div><span class="eyebrow">${ui.icon('user')} Account opening</span>
+      <h1 style="margin:10px 0 6px;font-size:25px">Open your Northvale account</h1>
+      <p class="card-sub">Takes about a minute. Your account number is issued instantly.</p></div></div>
+    <form id="reg-form" class="stack" novalidate>
+      ${ui.field({ label: 'Full name', name: 'name', required: true, placeholder: 'Jordan Ellis', attrs: 'autocomplete="name"' })}
+      ${ui.field({ label: 'Email address', name: 'email', type: 'email', required: true, placeholder: 'you@example.com', attrs: 'autocomplete="email"' })}
+      ${ui.field({ label: 'Phone number', name: 'phone', type: 'tel', required: true, placeholder: '(415) 555-0188', hint: 'US 10-digit mobile number', attrs: 'autocomplete="tel"' })}
+      <div class="field">
+        <span class="field-label">Account type</span>
+        <div class="account-type-grid">
+          ${ACCOUNT_TYPES.map(
+            (type, index) => `<label class="type-option ${index === 0 ? 'is-selected' : ''}" data-type="${type.id}">
+              <input type="radio" name="accountType" value="${type.id}" ${index === 0 ? 'checked' : ''} />
+              <span><strong>${ui.esc(type.name)}</strong><span>${ui.esc(type.blurb)}</span></span>
+            </label>`,
+          ).join('')}
         </div>
-        ${index < labels.length - 1 ? '<div class="step-line"></div>' : ''}`,
-        )
-        .join('')}
-    </div>`;
-  }
+      </div>
+      <div class="grid cols-2">
+        ${ui.field({ label: 'Password', name: 'password', type: 'password', required: true, hint: '10+ characters, upper and lower case, a number and a symbol.', attrs: 'autocomplete="new-password"' })}
+        ${ui.field({ label: 'Confirm password', name: 'confirmPassword', type: 'password', required: true, attrs: 'autocomplete="new-password"' })}
+      </div>
+      ${ui.field({ label: 'Transaction PIN', name: 'pin', type: 'password', hint: 'Optional now — 4 to 6 digits. Required to approve transfers and withdrawals.', attrs: 'inputmode="numeric" maxlength="6" autocomplete="off"' })}
+      <label class="checkbox"><input type="checkbox" name="consent" />
+        <span>I agree to the Northvale account agreement and electronic disclosures, and I confirm I am a US resident aged 18 or older.</span></label>
+      <span class="error" data-error="consent" hidden></span>
+      <button class="btn btn-primary btn-block" type="submit">Create my account</button>
+      <p style="font-size:11.5px;color:var(--silver-500);text-align:center;margin:0">Already have an account? <a href="#/signin">Sign in</a></p>
+      <p class="fine-print">Add your residential address and date of birth in Profile &amp; security after opening your account to complete identity verification. Northvale Financial is a financial technology company, not a bank.</p>
+    </form>`;
 
-  function renderStep() {
-    if (step === 1) {
-      card.innerHTML = `${stepper()}
-        <div class="card-head"><div><span class="eyebrow">${ui.icon('user')} Account application</span>
-          <h1 style="margin:10px 0 6px;font-size:25px">Open your Northvale account</h1>
-          <p class="card-sub">Step 1 of 3 · Personal details. All fields are required unless marked optional.</p></div></div>
-        <form id="step-form" class="stack" novalidate>
-          <div class="grid cols-2">
-            ${ui.field({ label: 'First name', name: 'firstName', value: draft.firstName, required: true, placeholder: 'Jordan' })}
-            ${ui.field({ label: 'Last name', name: 'lastName', value: draft.lastName, required: true, placeholder: 'Ellis' })}
-          </div>
-          <div class="grid cols-2">
-            ${ui.field({ label: 'Email address', name: 'email', type: 'email', value: draft.email, required: true, placeholder: 'you@example.com' })}
-            ${ui.field({ label: 'Phone number', name: 'phone', type: 'tel', value: draft.phone, required: true, placeholder: '(415) 555-0188', hint: 'US 10-digit number' })}
-          </div>
-          ${ui.field({ label: 'Date of birth', name: 'dob', type: 'date', value: draft.dob, required: true, hint: 'You must be at least 18 years old.' })}
-          ${ui.field({ label: 'Street address', name: 'line1', value: draft.address.line1, required: true, placeholder: '1180 Harbor View Drive' })}
-          ${ui.field({ label: 'Apartment, suite or unit', name: 'line2', value: draft.address.line2, placeholder: 'Apt 4B' })}
-          <div class="grid cols-2">
-            ${ui.field({ label: 'City', name: 'city', value: draft.address.city, required: true, placeholder: 'San Francisco' })}
-            <div class="field"><label for="f-state">State</label>
-              <select class="select" id="f-state" name="state" required>
-                <option value="">Select state</option>
-                ${US_STATES.map(([code, name]) => `<option value="${code}" ${draft.address.state === code ? 'selected' : ''}>${name}</option>`).join('')}
-              </select>
-              <span class="error" data-error="state" hidden></span>
-            </div>
-          </div>
-          <div class="grid cols-2">
-            ${ui.field({ label: 'ZIP code', name: 'postalCode', value: draft.address.postalCode, required: true, placeholder: '94105', attrs: 'inputmode="numeric" maxlength="10"' })}
-            <div></div>
-          </div>
-          <button class="btn btn-primary btn-block" type="submit">Continue to account setup</button>
-          <p style="font-size:11.5px;color:var(--silver-500);text-align:center;margin:0">Already have an account? <a href="#/signin">Sign in</a></p>
-        </form>`;
+  const form = card.querySelector('#reg-form');
+  form.querySelectorAll('[data-type]').forEach((label) => {
+    label.addEventListener('click', () => {
+      form.querySelectorAll('[data-type]').forEach((other) => other.classList.remove('is-selected'));
+      label.classList.add('is-selected');
+    });
+  });
 
-      const form = card.querySelector('#step-form');
-      form.addEventListener('submit', (event) => {
-        event.preventDefault();
-        ui.clearErrors(form);
-        const values = ui.formValues(form);
-        const required = ['firstName', 'lastName', 'email', 'phone', 'dob', 'line1', 'city', 'state', 'postalCode'];
-        let valid = true;
-        required.forEach((name) => {
-          if (!values[name]) {
-            ui.setFieldError(form, name, 'This field is required.');
-            valid = false;
-          }
-        });
-        if (!valid) return;
-        draft.firstName = values.firstName;
-        draft.lastName = values.lastName;
-        draft.email = values.email;
-        draft.phone = values.phone;
-        draft.dob = values.dob;
-        draft.address = { line1: values.line1, line2: values.line2, city: values.city, state: values.state, postalCode: values.postalCode };
-        step = 2;
-        renderStep();
-      });
-      return;
+  form.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    ui.clearErrors(form);
+    const values = ui.formValues(form);
+    const password = form.querySelector('[name="password"]').value;
+    const confirm = form.querySelector('[name="confirmPassword"]').value;
+    const pin = form.querySelector('[name="pin"]').value.replace(/\D/g, '');
+    let valid = true;
+
+    if (!values.name || String(values.name).trim().split(/\s+/).filter(Boolean).length < 2) {
+      ui.setFieldError(form, 'name', 'Enter your first and last name.');
+      valid = false;
     }
-
-    if (step === 2) {
-      card.innerHTML = `${stepper()}
-        <div class="card-head"><div><span class="eyebrow">${ui.icon('bank')} Account setup</span>
-          <h1 style="margin:10px 0 6px;font-size:25px">Choose your account</h1>
-          <p class="card-sub">Step 2 of 3 · Account type, password and transaction PIN.</p></div></div>
-        <form id="step-form" class="stack" novalidate>
-          <div class="account-type-grid">
-            ${ACCOUNT_TYPES.map(
-              (type) => `<label class="type-option ${draft.accountType === type.id ? 'is-selected' : ''}" data-type="${type.id}">
-                <input type="radio" name="accountType" value="${type.id}" ${draft.accountType === type.id ? 'checked' : ''} />
-                <span><strong>${ui.esc(type.name)}</strong><span>${ui.esc(type.blurb)}</span></span>
-              </label>`,
-            ).join('')}
-          </div>
-          ${ui.field({ label: 'Password', name: 'password', type: 'password', required: true, hint: 'At least 10 characters with upper and lower case, a number and a symbol.' })}
-          ${ui.field({ label: 'Confirm password', name: 'confirmPassword', type: 'password', required: true })}
-          ${ui.field({ label: 'Transaction PIN', name: 'pin', type: 'password', required: true, hint: '4–6 digits. Required to approve transfers and withdrawals.', attrs: 'inputmode="numeric" maxlength="6"' })}
-          <label class="checkbox"><input type="checkbox" name="consent" ${draft.consent ? 'checked' : ''} />
-            <span>I agree to the Northvale account agreement and electronic disclosures, and I confirm I am a US resident aged 18 or older.</span></label>
-          <span class="error" data-error="consent" hidden></span>
-          <div class="row" style="gap:10px">
-            <button class="btn btn-quiet" type="button" data-back>Back</button>
-            <button class="btn btn-primary" type="submit" style="flex:1">Continue to verification</button>
-          </div>
-        </form>`;
-
-      const form = card.querySelector('#step-form');
-      form.querySelectorAll('[data-type]').forEach((label) => {
-        label.addEventListener('click', () => {
-          form.querySelectorAll('[data-type]').forEach((other) => other.classList.remove('is-selected'));
-          label.classList.add('is-selected');
-        });
-      });
-      form.querySelector('[data-back]').addEventListener('click', () => {
-        step = 1;
-        renderStep();
-      });
-      form.addEventListener('submit', (event) => {
-        event.preventDefault();
-        ui.clearErrors(form);
-        const values = ui.formValues(form);
-        const password = form.querySelector('[name="password"]').value;
-        const confirm = form.querySelector('[name="confirmPassword"]').value;
-        const pin = form.querySelector('[name="pin"]').value.replace(/\D/g, '');
-        let valid = true;
-        if (password.length < 10 || !/[a-z]/.test(password) || !/[A-Z]/.test(password) || !/\d/.test(password) || !/[^A-Za-z0-9]/.test(password)) {
-          ui.setFieldError(form, 'password', 'Use 10+ characters with upper and lower case, a number and a symbol.');
-          valid = false;
-        }
-        if (password !== confirm) {
-          ui.setFieldError(form, 'confirmPassword', 'Passwords do not match.');
-          valid = false;
-        }
-        if (!/^\d{4,6}$/.test(pin)) {
-          ui.setFieldError(form, 'pin', 'Enter a 4–6 digit PIN.');
-          valid = false;
-        }
-        if (!values.consent) {
-          ui.setFieldError(form, 'consent', 'You must accept the agreement to continue.');
-          valid = false;
-        }
-        if (!valid) return;
-        draft.accountType = values.accountType || 'checking';
-        draft.password = password;
-        draft.pin = pin;
-        draft.consent = true;
-        step = 3;
-        renderStep();
-      });
-      return;
+    if (!values.email || !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(values.email)) {
+      ui.setFieldError(form, 'email', 'Enter a valid email address.');
+      valid = false;
     }
+    if (!values.phone || values.phone.replace(/\D/g, '').length < 10) {
+      ui.setFieldError(form, 'phone', 'Enter a 10-digit US phone number.');
+      valid = false;
+    }
+    if (
+      password.length < 10 ||
+      !/[a-z]/.test(password) ||
+      !/[A-Z]/.test(password) ||
+      !/\d/.test(password) ||
+      !/[^A-Za-z0-9]/.test(password)
+    ) {
+      ui.setFieldError(form, 'password', 'Use 10+ characters with upper and lower case, a number and a symbol.');
+      valid = false;
+    }
+    if (password !== confirm) {
+      ui.setFieldError(form, 'confirmPassword', 'Passwords do not match.');
+      valid = false;
+    }
+    if (pin && !/^\d{4,6}$/.test(pin)) {
+      ui.setFieldError(form, 'pin', 'Enter a 4–6 digit PIN, or leave it blank.');
+      valid = false;
+    }
+    if (!values.consent) {
+      ui.setFieldError(form, 'consent', 'You must accept the agreement to continue.');
+      valid = false;
+    }
+    if (!valid) return;
 
-    card.innerHTML = `${stepper()}
-      <div class="card-head"><div><span class="eyebrow">${ui.icon('shield')} Identity verification</span>
-        <h1 style="margin:10px 0 6px;font-size:25px">Verify your identity</h1>
-        <p class="card-sub">Step 3 of 3 · Required by federal customer-identification rules. Your application is reviewed by our operations team.</p></div></div>
-      <form id="step-form" class="stack" novalidate>
-        ${ui.field({ label: 'Last 4 digits of SSN', name: 'ssnLast4', required: true, hint: 'Only the final four digits are stored, encrypted at rest.', attrs: 'inputmode="numeric" maxlength="4"' })}
-        <div class="field"><label for="f-idType">Identity document</label>
-          <select class="select" id="f-idType" name="idType">
-            <option value="drivers_license">Driver’s licence</option>
-            <option value="state_id">State identification card</option>
-            <option value="passport">Passport</option>
-            <option value="us_passport">US passport card</option>
-          </select>
-        </div>
+    const button = form.querySelector('button[type="submit"]');
+    ui.busy(button, true, 'Opening your account…');
+    try {
+      const data = await api.post('/api/auth/register', {
+        name: values.name,
+        email: values.email,
+        phone: values.phone,
+        password,
+        pin: pin || undefined,
+        accountType: values.accountType || 'checking',
+        consent: true,
+      });
+      await ctx.refresh();
+      card.innerHTML = `<div class="success-mark">${ui.icon('check')}</div>
+        <h1 style="text-align:center;font-size:25px;margin-bottom:8px">Your account is open</h1>
+        <p style="text-align:center;color:var(--ink-soft);font-size:13.5px;margin:0 0 18px">${ui.esc(data.message || 'Welcome to Northvale.')}</p>
         <div class="card" style="background:var(--silver-50);box-shadow:none">
           <div class="detail-grid">
-            <div><span class="bc-label">Applicant</span><strong>${ui.esc(`${draft.firstName} ${draft.lastName}`)}</strong></div>
-            <div><span class="bc-label">Email</span><strong>${ui.esc(draft.email)}</strong></div>
-            <div><span class="bc-label">Address</span><strong>${ui.esc(`${draft.address.line1}, ${draft.address.city}, ${draft.address.state} ${draft.address.postalCode}`)}</strong></div>
-            <div><span class="bc-label">Account</span><strong>${ui.esc(ui.accountTypeLabel(draft.accountType))}</strong></div>
+            <div><span class="bc-label">Account number</span><strong class="tabular">${ui.esc(ui.groupAccountNumber(data.account.accountNumber))}</strong></div>
+            <div><span class="bc-label">Routing number</span><strong class="tabular">${ui.esc(data.account.routingNumber)}</strong></div>
+            <div><span class="bc-label">Account type</span><strong>${ui.esc(ui.accountTypeLabel(data.account.accountType))}</strong></div>
+            <div><span class="bc-label">Status</span><strong>Verification pending</strong></div>
           </div>
         </div>
-        <div class="notice info">${ui.icon('lock')}<div>Your account number is issued immediately after registration. Money movement is enabled once identity verification is approved.</div></div>
-        <div class="row" style="gap:10px">
-          <button class="btn btn-quiet" type="button" data-back>Back</button>
-          <button class="btn btn-primary" type="submit" style="flex:1">Submit application</button>
-        </div>
-      </form>`;
-
-    const form = card.querySelector('#step-form');
-    form.querySelector('[data-back]').addEventListener('click', () => {
-      step = 2;
-      renderStep();
-    });
-    form.addEventListener('submit', async (event) => {
-      event.preventDefault();
-      ui.clearErrors(form);
-      const button = form.querySelector('button[type="submit"]');
-      ui.busy(button, true, 'Submitting…');
-      const values = ui.formValues(form);
-      try {
-        const data = await api.post('/api/auth/register', {
-          firstName: draft.firstName,
-          lastName: draft.lastName,
-          email: draft.email,
-          phone: draft.phone,
-          dob: draft.dob,
-          address: draft.address,
-          accountType: draft.accountType,
-          password: draft.password,
-          pin: draft.pin,
-          consent: draft.consent,
-          identity: { ssnLast4: values.ssnLast4, idType: values.idType },
-        });
-        await ctx.refresh();
-        card.innerHTML = `<div class="success-mark">${ui.icon('check')}</div>
-          <h1 style="text-align:center;font-size:25px;margin-bottom:8px">Your account is open</h1>
-          <p style="text-align:center;color:var(--ink-soft);font-size:13.5px;margin:0 0 18px">${ui.esc(data.message || 'Identity verification is under review.')}</p>
-          <div class="card" style="background:var(--silver-50);box-shadow:none">
-            <div class="detail-grid">
-              <div><span class="bc-label">Account number</span><strong class="tabular">${ui.esc(ui.groupAccountNumber(data.account.accountNumber))}</strong></div>
-              <div><span class="bc-label">Routing number</span><strong class="tabular">${ui.esc(data.account.routingNumber)}</strong></div>
-              <div><span class="bc-label">Account type</span><strong>${ui.esc(ui.accountTypeLabel(data.account.accountType))}</strong></div>
-              <div><span class="bc-label">Status</span><strong>Verification pending</strong></div>
-            </div>
-          </div>
-          <div class="notice warn" style="margin-top:16px">${ui.icon('alert')}<div>Keep your account number safe. Deposits, transfers and withdrawals unlock as soon as our operations team approves your identity documents.</div></div>
-          <a class="btn btn-primary btn-block" href="#/dashboard" style="margin-top:16px">Go to your dashboard</a>`;
-        ui.toast('Account created. Welcome to Northvale.', 'success');
-      } catch (error) {
-        if (!errorToField(form, error)) ui.toast(error.message, 'error');
-        ui.busy(button, false);
-      }
-    });
-  }
-
-  renderStep();
+        <div class="notice warn" style="margin-top:16px">${ui.icon('alert')}<div>Next step: add your residential address and date of birth in Profile &amp; security. Transfers and withdrawals unlock once our operations team approves your identity.</div></div>
+        <a class="btn btn-primary btn-block" href="#/settings" style="margin-top:16px">Complete your profile</a>
+        <a class="btn btn-quiet btn-block" href="#/dashboard" style="margin-top:8px">Go to your dashboard</a>`;
+      ui.toast('Account created. Welcome to Northvale.', 'success');
+    } catch (error) {
+      if (!errorToField(form, error)) ui.toast(error.message, 'error');
+      ui.busy(button, false);
+    }
+  });
 }
