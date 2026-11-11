@@ -18,11 +18,11 @@ const { lookupRecipient } = require('../services/lookup');
 const { evaluateOutgoing, recordAlerts } = require('../services/fraud');
 const { recordAudit, notify } = require('../services/audit');
 const { parseAmountToCents, formatUSD } = require('../money');
-const { badRequest, conflict, notFound, AppError } = require('../errors');
+const { badRequest, conflict, notFound, AppError, asyncHandler } = require('../errors');
 
 const router = express.Router();
 
-router.post('/', requireAuth, requireActiveAccount, requireVerified, async (req, res) => {
+router.post('/', requireAuth, requireActiveAccount, requireVerified, asyncHandler(async (req, res) => {
   const body = req.body || {};
   const amountCents = parseAmountToCents(body.amount);
   validateAmount(amountCents, {
@@ -175,7 +175,7 @@ router.post('/', requireAuth, requireActiveAccount, requireVerified, async (req,
       : 'Transfer submitted. Funds are on hold until the receiving institution confirms settlement.',
     receiptUrl: `/api/account/transactions/${tx.id}/receipt`,
   });
-});
+}));
 
 router.post('/:id/cancel', requireAuth, (req, res) => {
   const tx = getTransactionForUser(req.params.id, req.user.id);

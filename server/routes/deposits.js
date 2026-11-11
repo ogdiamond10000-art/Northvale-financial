@@ -16,7 +16,7 @@ const {
 const payments = require('../services/payments');
 const { recordAudit, notify } = require('../services/audit');
 const { parseAmountToCents, formatUSD } = require('../money');
-const { badRequest, conflict, notFound } = require('../errors');
+const { badRequest, conflict, notFound, asyncHandler } = require('../errors');
 
 const router = express.Router();
 
@@ -54,7 +54,7 @@ router.get('/config', requireAuth, (req, res) => {
   });
 });
 
-router.post('/checkout', requireAuth, requireActiveAccount, async (req, res) => {
+router.post('/checkout', requireAuth, requireActiveAccount, asyncHandler(async (req, res) => {
   if (!payments.isConfigured()) throw payments.gatewayRequiredError();
   const amountCents = parseAmountToCents(req.body?.amount);
   validateAmount(amountCents, {
@@ -114,10 +114,10 @@ router.post('/checkout', requireAuth, requireActiveAccount, async (req, res) => 
     checkoutUrl: session.url,
     message: 'Complete the card payment to fund your deposit.',
   });
-});
+}));
 
 /** Called by the browser when Stripe redirects back. Credits only on a paid session. */
-router.get('/confirm', requireAuth, async (req, res) => {
+router.get('/confirm', requireAuth, asyncHandler(async (req, res) => {
   const sessionId = String(req.query.session_id || '');
   if (!sessionId) throw badRequest('Missing payment session.', 'session_missing');
   if (!payments.isConfigured()) throw payments.gatewayRequiredError();
@@ -171,7 +171,7 @@ router.get('/confirm', requireAuth, async (req, res) => {
     status: 'completed',
     message: `Deposit confirmed. ${formatUSD(tx.amount_cents)} is now available.`,
   });
-});
+}));
 
 router.post('/:id/cancel', requireAuth, (req, res) => {
   const tx = getTransactionForUser(req.params.id, req.user.id);

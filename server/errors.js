@@ -30,4 +30,15 @@ function conflict(message, code = 'conflict') {
   return new AppError(409, message, code);
 }
 
-module.exports = { AppError, badRequest, unauthorized, forbidden, notFound, conflict };
+/**
+ * Express 4 does not forward rejected promises from async handlers to the error
+ * middleware, so an awaited failure would escape as an unhandled rejection and
+ * terminate the process. Wrapping forwards it to `next` instead.
+ */
+function asyncHandler(fn) {
+  return function wrapped(req, res, next) {
+    Promise.resolve(fn(req, res, next)).catch(next);
+  };
+}
+
+module.exports = { AppError, badRequest, unauthorized, forbidden, notFound, conflict, asyncHandler };

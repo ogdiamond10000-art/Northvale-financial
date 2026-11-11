@@ -14,7 +14,7 @@ const { lookupRecipient } = require('../services/lookup');
 const { evaluateOutgoing, recordAlerts } = require('../services/fraud');
 const { recordAudit, notify } = require('../services/audit');
 const { parseAmountToCents, formatUSD } = require('../money');
-const { badRequest, conflict } = require('../errors');
+const { badRequest, conflict, asyncHandler } = require('../errors');
 
 const router = express.Router();
 
@@ -46,7 +46,7 @@ router.get('/methods', requireAuth, (req, res) => {
   res.json({ methods: METHODS });
 });
 
-router.post('/', requireAuth, requireActiveAccount, requireVerified, async (req, res) => {
+router.post('/', requireAuth, requireActiveAccount, requireVerified, asyncHandler(async (req, res) => {
   const body = req.body || {};
   const method = METHODS.find((entry) => entry.id === body.method);
   if (!method) throw badRequest('Select a withdrawal method.', 'method_invalid');
@@ -140,6 +140,6 @@ router.post('/', requireAuth, requireActiveAccount, requireVerified, async (req,
     message: `Withdrawal submitted for processing. ${formatUSD(amountCents)} is on hold until the payout is verified and released.`,
     receiptUrl: `/api/account/transactions/${tx.id}/receipt`,
   });
-});
+}));
 
 module.exports = router;
