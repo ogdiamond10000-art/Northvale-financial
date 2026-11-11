@@ -190,6 +190,9 @@ export async function renderDeposit(page, ctx) {
         <div><span>Reference</span><strong class="tabular">${ui.esc(tx.reference || '—')}</strong></div>
         <div><span>Status</span><strong>${ui.statusBadge(tx.status || result.status)}</strong></div>
         <div><span>Amount</span><strong class="tabular">${ui.esc(tx.amount || '—')}</strong></div>
+        ${result.tax && result.tax.taxCents > 0 ? `<div><span>Sales tax</span><strong class="tabular">${ui.esc(ui.fmtUSD(result.tax.taxCents))}</strong></div>` : ''}
+        ${result.tax && result.tax.feeCents > 0 ? `<div><span>Processing fee</span><strong class="tabular">${ui.esc(ui.fmtUSD(result.tax.feeCents))}</strong></div>` : ''}
+        ${result.tax && result.tax.totalCents > 0 ? `<div><span>Charged to card</span><strong class="tabular">${ui.esc(ui.fmtUSD(result.tax.totalCents))}</strong></div>` : ''}
         <div><span>Method</span><strong>${ui.esc(tx.method ? ui.titleCase(String(tx.method).replace('_', ' ')) : 'Card')}</strong></div>
         <div><span>Date</span><strong>${ui.esc(ui.fmtDate(tx.createdAt || new Date().toISOString()))}</strong></div>
         <div><span>Credited to</span><strong class="tabular">${ui.esc(ui.groupAccountNumber(account.accountNumber || ''))}</strong></div>
