@@ -104,7 +104,10 @@ before(async () => {
 });
 
 after(async () => {
+  // undici keeps keep-alive sockets open, which would otherwise stall shutdown.
+  if (typeof server.closeAllConnections === 'function') server.closeAllConnections();
   await new Promise((resolve) => server.close(resolve));
+  db.close();
   fs.rmSync(tmpDir, { recursive: true, force: true });
 });
 
@@ -161,6 +164,12 @@ test('duplicate email registration is rejected', async () => {
 
 test('outgoing money is blocked until identity verification completes', async () => {
   const request = makeClient();
+  const login = await request('/api/auth/login', {
+    method: 'POST',
+    body: { email: NEW_USER.email, password: NEW_USER.password },
+  });
+  assert.equal(login.status, 200, login.text);
+
   const res = await request('/api/transfers', {
     method: 'POST',
     body: {
