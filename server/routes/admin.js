@@ -500,6 +500,81 @@ router.post('/transactions/:id/release', (req, res) => {
   res.json({ transaction: serializeTransaction(released), message: 'Hold released and transaction settled.' });
 });
 
+/**
+ * Bulk approval. Settles every pending or held outgoing transfer through the
+ * normal ledger path, one audited decision per transaction, and reports the
+ * real per-item outcome instead of assuming success.
+ */
+router.post('/transactions/approve-all', (req, res) => {
+  const note = String(req.body?.note || '').trim().slice(0, 200) || 'Bulk approved by operations after verification';
+  const rows = db
+    .prepare(
+      `SELECT * FROM transactions
+       WHERE status IN ('pending', 'on_hold') AND type IN ('transfer_out', 'withdrawal_out')
+       ORDER BY created_at ASC`,
+    )
+    .all();
+
+  if (!rows.length) {
+    return res.json({
+      approved: 0,
+      failed: 0,
+      total: 0,
+      transactions: [],
+      failures: [],
+      message: 'There are no pending transfers to approve.',
+    });
+  }
+
+  const approved = [];
+  const failures = [];
+
+  for (const row of rows) {
+    try {
+      const settled = settleTransaction(row.id, {
+        actorId: req.user.id,
+        note,
+        fromStatuses: ['pending', 'on_hold'],
+      });
+      approved.push(serializeTransaction(settled));
+      notify(row.user_id, {
+        title: 'Transfer approved',
+        body: `${formatUSD(row.amount_cents)} ${row.type.replace(/_/g, ' ')} (${row.reference}) was verified and approved by operations.`,
+        kind: 'transaction',
+      });
+      recordAudit({
+        actorId: req.user.id,
+        actorEmail: req.user.email,
+        action: 'transaction.approved',
+        targetType: 'transaction',
+        targetId: row.id,
+        ip: req.ip,
+        metadata: { reference: row.reference, amountCents: row.amount_cents, note, bulk: true },
+      });
+    } catch (error) {
+      failures.push({ id: row.id, reference: row.reference, reason: error.message });
+      recordAudit({
+        actorId: req.user.id,
+        actorEmail: req.user.email,
+        action: 'transaction.approve_failed',
+        targetType: 'transaction',
+        targetId: row.id,
+        ip: req.ip,
+        metadata: { reference: row.reference, reason: error.message, bulk: true },
+      });
+    }
+  }
+
+  res.json({
+    approved: approved.length,
+    failed: failures.length,
+    total: rows.length,
+    transactions: approved,
+    failures,
+    message: `${approved.length} of ${rows.length} pending transfer${rows.length === 1 ? '' : 's'} approved and settled.`,
+  });
+});
+
 /** Documented balance adjustment with a mandatory reason and full audit trail. */
 router.post('/customers/:id/adjustment', (req, res) => {
   // Accept either the internal user id or the 10-digit account number.
