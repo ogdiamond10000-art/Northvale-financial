@@ -3,8 +3,8 @@
 const express = require('express');
 
 const config = require('../config');
-const { db } = require('../db');
-const { requireAuth } = require('../services/sessions');
+const { db, nowIso } = require('../db');
+const { requireAuth, publicUser } = require('../services/sessions');
 const {
   accountSummary,
   listTransactions,
@@ -14,7 +14,9 @@ const {
 const { searchBanks } = require('../data/banks');
 const directory = require('../services/directory');
 const { lookupRecipient } = require('../services/lookup');
-const { notFound, asyncHandler } = require('../errors');
+const { notFound, badRequest, asyncHandler } = require('../errors');
+const validate = require('../validate');
+const { recordAudit } = require('../services/audit');
 const { formatUSD } = require('../money');
 
 const router = express.Router();
@@ -195,6 +197,75 @@ router.post('/recipients/lookup', requireAuth, async (req, res, next) => {
   } catch (error) {
     next(error);
   }
+});
+
+// Fast-registration follow-up: customers add their address, date of birth and
+// contact details after the account already exists.
+router.patch('/account/profile', requireAuth, (req, res) => {
+  const user = req.user;
+  const body = req.body || {};
+
+  const phone = body.phone ? validate.phone(body.phone) : user.phone;
+  const dateOfBirth = body.dob ? validate.dob(body.dob) : user.dob || '';
+
+  let address = {
+    line1: user.address_line1 || '',
+    line2: user.address_line2 || null,
+    city: user.city || '',
+    state: user.state || '',
+    postalCode: user.postal_code || '',
+  };
+  if (body.address && Object.keys(body.address).length > 0) {
+    const incoming = body.address;
+    address = {
+      line1: validate.text(incoming.line1, 'Street address', { max: 120 }),
+      line2: incoming.line2 ? validate.text(incoming.line2, 'Address line 2', { max: 120 }) : null,
+      city: validate.text(incoming.city, 'City', { max: 80 }),
+      state: validate.state(incoming.state),
+      postalCode: validate.postalCode(incoming.postalCode),
+    };
+  }
+
+  if (!address.line1 && !address.city && !address.state && !address.postalCode && !dateOfBirth) {
+    throw badRequest('Add your address and date of birth to complete your profile.', 'profile_empty');
+  }
+
+  db.prepare(
+    `UPDATE users
+        SET phone = ?, address_line1 = ?, address_line2 = ?, city = ?, state = ?, postal_code = ?, dob = ?
+      WHERE id = ?`,
+  ).run(
+    phone,
+    address.line1,
+    address.line2,
+    address.city,
+    address.state,
+    address.postalCode,
+    dateOfBirth,
+    user.id,
+  );
+
+  const updated = db.prepare('SELECT * FROM users WHERE id = ?').get(user.id);
+  recordAudit({
+    actorId: user.id,
+    actorRole: user.role,
+    action: 'customer.profile_updated',
+    targetType: 'user',
+    targetId: user.id,
+    metadata: {
+      phone: phone !== user.phone,
+      address: address.line1 !== (user.address_line1 || ''),
+      dateOfBirth: dateOfBirth !== (user.dob || ''),
+      at: nowIso(),
+    },
+  });
+
+  res.json({
+    user: publicUser(updated),
+    message: publicUser(updated).profileComplete
+      ? 'Profile complete. Identity verification is under review.'
+      : 'Profile saved. Add the remaining details to finish verification.',
+  });
 });
 
 module.exports = router;
