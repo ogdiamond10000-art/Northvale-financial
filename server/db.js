@@ -143,6 +143,18 @@ CREATE TABLE IF NOT EXISTS fraud_alerts (
   reviewed_by TEXT
 );
 
+-- Every Stripe webhook delivery, so redelivered events are never applied twice.
+CREATE TABLE IF NOT EXISTS stripe_events (
+  id TEXT PRIMARY KEY,
+  type TEXT NOT NULL,
+  livemode INTEGER NOT NULL DEFAULT 0,
+  transaction_id TEXT,
+  status TEXT NOT NULL DEFAULT 'received',
+  detail TEXT,
+  created_at TEXT NOT NULL,
+  processed_at TEXT
+);
+
 CREATE TABLE IF NOT EXISTS webauthn_credentials (
   credential_id TEXT PRIMARY KEY,
   user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,

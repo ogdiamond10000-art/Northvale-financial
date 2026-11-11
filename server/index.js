@@ -6,6 +6,7 @@ const express = require('express');
 const config = require('./config');
 require('./db'); // initialise schema + seed before routes read data
 const payments = require('./services/payments');
+const stripeWebhooks = require('./services/stripe-webhooks');
 const { createRateLimiter } = require('./security');
 const { settleTransaction, getTransaction } = require('./services/ledger');
 const { notify } = require('./services/audit');
@@ -39,33 +40,23 @@ app.use((req, res, next) => {
 });
 
 /* --------------------------- Stripe webhook (raw) --------------------------- */
+// Stripe signs the exact raw body, so this route is registered before express.json().
 app.post('/api/webhooks/stripe', express.raw({ type: 'application/json' }), (req, res) => {
-  const signature = req.headers['stripe-signature'];
-  const verification = payments.verifyWebhookSignature(req.body, signature);
+  const verification = payments.verifyWebhookSignature(req.body, req.headers['stripe-signature']);
   if (!verification.valid) {
     return res.status(400).json({ error: 'Invalid webhook signature.', reason: verification.reason });
   }
-  let event;
+
+  let result;
   try {
-    event = JSON.parse(req.body.toString('utf8'));
-  } catch {
-    return res.status(400).json({ error: 'Invalid webhook payload.' });
+    result = stripeWebhooks.processEvent(verification.event);
+  } catch (error) {
+    // Non-2xx makes Stripe retry; the event stays recorded for reconciliation.
+    console.error('[stripe] webhook processing failed:', error?.message || error);
+    return res.status(500).json({ error: 'Webhook processing failed.' });
   }
 
-  const session = event?.data?.object || {};
-  const transactionId = session.client_reference_id || session?.metadata?.transaction_id;
-  if (event.type === 'checkout.session.completed' && session.payment_status === 'paid' && transactionId) {
-    const tx = getTransaction(transactionId);
-    if (tx && tx.status === 'pending' && Number(session.amount_total) === tx.amount_cents) {
-      settleTransaction(tx.id, { note: `stripe webhook ${event.id}` });
-      notify(tx.user_id, {
-        title: 'Deposit credited',
-        body: `${formatUSD(tx.amount_cents)} was credited after the card payment was confirmed by the gateway. Reference ${tx.reference}.`,
-        kind: 'transaction',
-      });
-    }
-  }
-  res.json({ received: true });
+  res.json({ received: true, status: result.status, duplicate: Boolean(result.duplicate) });
 });
 
 /* -------------------------------- api routes -------------------------------- */

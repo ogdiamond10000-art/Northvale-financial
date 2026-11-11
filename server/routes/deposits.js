@@ -25,7 +25,18 @@ router.get('/config', requireAuth, (req, res) => {
     gateway: {
       provider: 'stripe',
       configured: payments.isConfigured(),
+      webhookConfigured: payments.isWebhookConfigured(),
+      mode: payments.mode(),
       requiredEnv: ['STRIPE_SECRET_KEY', 'STRIPE_WEBHOOK_SECRET'],
+    },
+    tax: {
+      enabled: payments.taxEnabled(),
+      automatic: true,
+      taxCode: config.stripe.taxCode,
+      feePercent: Number(config.stripe.feePercent) || 0,
+      note: payments.taxEnabled()
+        ? 'Stripe Tax calculates sales tax from your billing address at checkout. Any tax is collected on top of your deposit amount.'
+        : 'Automatic tax calculation is disabled (STRIPE_TAX_ENABLED=false).',
     },
     methods: [
       {
@@ -63,6 +74,8 @@ router.post('/checkout', requireAuth, requireActiveAccount, asyncHandler(async (
     label: 'deposit amount',
   });
 
+  const feeCents = payments.computeFeeCents(amountCents);
+
   const tx = insertTransaction({
     user_id: req.user.id,
     account_id: req.account.id,
@@ -74,7 +87,7 @@ router.post('/checkout', requireAuth, requireActiveAccount, asyncHandler(async (
     channel: 'card',
     method: 'card',
     provider: 'stripe',
-    metadata: { gateway: 'stripe_checkout', stage: 'awaiting_payment' },
+    metadata: { gateway: 'stripe_checkout', stage: 'awaiting_payment', feeCents, taxEnabled: payments.taxEnabled() },
   });
 
   const origin = `${req.protocol}://${req.get('host')}`;
@@ -82,6 +95,7 @@ router.post('/checkout', requireAuth, requireActiveAccount, asyncHandler(async (
   try {
     session = await payments.createCheckoutSession({
       amountCents,
+      feeCents,
       transactionId: tx.id,
       reference: tx.reference,
       customerEmail: req.user.email,
@@ -93,9 +107,18 @@ router.post('/checkout', requireAuth, requireActiveAccount, asyncHandler(async (
     throw error;
   }
 
+  const quoted = payments.breakdown(session);
   db.prepare('UPDATE transactions SET provider_ref = ?, metadata = ? WHERE id = ?').run(
     session.id,
-    JSON.stringify({ gateway: 'stripe_checkout', stage: 'awaiting_payment', checkoutUrl: session.url }),
+    JSON.stringify({
+      gateway: 'stripe_checkout',
+      stage: 'awaiting_payment',
+      checkoutUrl: session.url,
+      feeCents,
+      taxEnabled: payments.taxEnabled(),
+      estimatedTaxCents: quoted.taxCents,
+      totalCents: quoted.totalCents,
+    }),
     tx.id,
   );
 
@@ -112,7 +135,11 @@ router.post('/checkout', requireAuth, requireActiveAccount, asyncHandler(async (
   res.status(201).json({
     transaction: serializeTransaction(db.prepare('SELECT * FROM transactions WHERE id = ?').get(tx.id)),
     checkoutUrl: session.url,
-    message: 'Complete the card payment to fund your deposit.',
+    feeCents,
+    taxEnabled: payments.taxEnabled(),
+    message: payments.taxEnabled()
+      ? 'Complete the card payment to fund your deposit. Sales tax, if applicable, is added by Stripe at checkout.'
+      : 'Complete the card payment to fund your deposit.',
   });
 }));
 
@@ -137,10 +164,12 @@ router.get('/confirm', requireAuth, asyncHandler(async (req, res) => {
 
   const session = await payments.retrieveCheckoutSession(sessionId);
   const paid = session.payment_status === 'paid';
-  const amountMatches = Number(session.amount_total) === tx.amount_cents;
+  const money = payments.breakdown(session);
+  const amountMatches = money.depositCents === tx.amount_cents;
+  const currencyMatches = money.currency === 'USD';
   const referenceMatches = session.client_reference_id === tx.id;
 
-  if (!paid || !amountMatches || !referenceMatches) {
+  if (!paid || !amountMatches || !currencyMatches || !referenceMatches) {
     return res.json({
       transaction: serializeTransaction(tx),
       status: 'pending',
@@ -152,6 +181,21 @@ router.get('/confirm', requireAuth, asyncHandler(async (req, res) => {
   }
 
   const settled = settleTransaction(tx.id, { actorId: req.user.id, note: `stripe session ${sessionId}` });
+  db.prepare('UPDATE transactions SET metadata = ? WHERE id = ?').run(
+    JSON.stringify({
+      gateway: 'stripe_checkout',
+      stage: 'paid',
+      stripeSessionId: sessionId,
+      stripePaymentIntent:
+        typeof session.payment_intent === 'string' ? session.payment_intent : session.payment_intent?.id || null,
+      taxCents: money.taxCents,
+      feeCents: money.feeCents,
+      totalCents: money.totalCents,
+      taxCountry: session.customer_details?.address?.country || null,
+    }),
+    tx.id,
+  );
+  const refreshed = db.prepare('SELECT * FROM transactions WHERE id = ?').get(tx.id);
   notify(req.user.id, {
     title: 'Deposit credited',
     body: `${formatUSD(tx.amount_cents)} was credited to your account after the card payment was confirmed. Reference ${tx.reference}.`,
@@ -167,9 +211,13 @@ router.get('/confirm', requireAuth, asyncHandler(async (req, res) => {
     metadata: { provider: 'stripe', sessionId, amountCents: tx.amount_cents },
   });
   res.json({
-    transaction: serializeTransaction(settled),
+    transaction: serializeTransaction(refreshed || settled),
     status: 'completed',
-    message: `Deposit confirmed. ${formatUSD(tx.amount_cents)} is now available.`,
+    tax: money,
+    message:
+      money.taxCents > 0
+        ? `Deposit confirmed. ${formatUSD(tx.amount_cents)} is now available (${formatUSD(money.taxCents)} tax collected separately).`
+        : `Deposit confirmed. ${formatUSD(tx.amount_cents)} is now available.`,
   });
 }));
 

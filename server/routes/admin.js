@@ -11,12 +11,66 @@ const {
   accountSummary,
 } = require('../services/ledger');
 const { recordAudit, notify } = require('../services/audit');
+const payments = require('../services/payments');
 const { formatUSD } = require('../money');
-const { badRequest, notFound, conflict } = require('../errors');
+const { badRequest, notFound, conflict, asyncHandler } = require('../errors');
 
 const router = express.Router();
 
 router.use(requireAuth, requireAdmin);
+
+/** Stripe gateway + tax state, recent webhook deliveries and reconciliation totals. */
+router.get('/payments', asyncHandler(async (req, res) => {
+  const gateway = payments.gatewayStatus();
+  const tax = await payments.taxStatus();
+
+  const events = db
+    .prepare(
+      `SELECT id, type, livemode, transaction_id, status, detail, created_at, processed_at
+       FROM stripe_events ORDER BY created_at DESC LIMIT 25`,
+    )
+    .all();
+
+  const byStatus = db
+    .prepare(
+      `SELECT status, COUNT(*) AS count, COALESCE(SUM(amount_cents), 0) AS volume
+       FROM transactions WHERE provider = 'stripe' AND type = 'deposit' GROUP BY status`,
+    )
+    .all()
+    .map((row) => ({ status: row.status, count: row.count, volumeCents: row.volume, volume: formatUSD(row.volume) }));
+
+  const taxTotals = db
+    .prepare(
+      `SELECT COUNT(*) AS count,
+              COALESCE(SUM(json_extract(metadata, '$.taxCents')), 0) AS taxCents,
+              COALESCE(SUM(json_extract(metadata, '$.feeCents')), 0) AS feeCents,
+              COALESCE(SUM(json_extract(metadata, '$.totalCents')), 0) AS totalCents
+       FROM transactions
+       WHERE provider = 'stripe' AND status = 'completed'`,
+    )
+    .get();
+
+  const needsReview = db
+    .prepare("SELECT COUNT(*) AS count FROM transactions WHERE provider = 'stripe' AND status = 'review'")
+    .get();
+
+  res.json({
+    gateway,
+    tax,
+    events,
+    deposits: byStatus,
+    taxTotals: {
+      count: taxTotals.count,
+      taxCents: taxTotals.taxCents,
+      feeCents: taxTotals.feeCents,
+      totalCents: taxTotals.totalCents,
+      tax: formatUSD(taxTotals.taxCents),
+      fees: formatUSD(taxTotals.feeCents),
+      total: formatUSD(taxTotals.totalCents),
+    },
+    needsReview: needsReview.count,
+  });
+}));
 
 function adminUserRow(user) {
   const account = db.prepare('SELECT * FROM accounts WHERE user_id = ? ORDER BY opened_at ASC LIMIT 1').get(user.id);
